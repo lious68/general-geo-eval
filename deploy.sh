@@ -1,82 +1,98 @@
 #!/bin/bash
-# UCloud GEO 评估系统 - 一键部署脚本
-# 用法: bash deploy.sh
+# UCloud GEO 评估系统 - 服务器一键部署
+# 在 xshell GEO 窗口中执行: bash <(curl -sL https://raw.githubusercontent.com/lious68/ucloud-geo-eval/master/deploy.sh)
+# 或者先 clone 再执行
+
 set -e
+echo "========================================="
+echo "  UCloud GEO 评估系统 - 服务器部署"
+echo "========================================="
 
+# 1. 克隆代码
 INSTALL_DIR="/opt/ucloud-geo-eval"
-echo "========================================="
-echo "  UCloud GEO 评估系统 - 部署脚本"
-echo "========================================="
-
-# 1. 检测系统
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python3 未安装，正在安装..."
-    yum install -y python3 python3-pip || apt-get install -y python3 python3-pip
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo "📦 克隆代码..."
+    yum install -y git 2>/dev/null || apt-get install -y git 2>/dev/null
+    git clone https://github.com/lious68/ucloud-geo-eval.git $INSTALL_DIR
+else
+    echo "✅ 代码已存在，拉取最新..."
+    cd $INSTALL_DIR && git pull
 fi
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo "✅ Python $PYTHON_VERSION"
+cd $INSTALL_DIR
 
-# 2. 安装依赖
-echo ""
+# 2. 安装 Python 依赖
 echo "📦 安装 Python 依赖..."
-pip3 install fastapi uvicorn aiosqlite python-dotenv openai snownlp pandas openpyxl numpy
-
-# 3. 检查/安装 Nginx
-if ! command -v nginx &> /dev/null; then
-    echo "📦 安装 Nginx..."
-    yum install -y nginx || apt-get install -y nginx
+if ! command -v python3 &> /dev/null; then
+    yum install -y python3 python3-pip 2>/dev/null || apt-get install -y python3 python3-pip 2>/dev/null
 fi
-echo "✅ Nginx 已安装"
+pip3 install --upgrade pip -q
+pip3 install fastapi uvicorn aiosqlite python-dotenv openai snownlp pandas openpyxl numpy -q
 
-# 4. 部署代码
-echo ""
-echo "📁 部署代码到 $INSTALL_DIR ..."
-mkdir -p $INSTALL_DIR
-# 假设代码已在当前目录（git clone 下来的）
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
-    cp -r $SCRIPT_DIR/* $INSTALL_DIR/ 2>/dev/null || true
-    cp -r $SCRIPT_DIR/core $INSTALL_DIR/ 2>/dev/null || true
+# 3. 安装 Node.js 和构建前端
+echo "📦 构建前端..."
+if ! command -v node &> /dev/null; then
+    echo "  安装 Node.js 18..."
+    curl -fsSL https://rpm.nodesource.com/setup_18.x | bash - 2>/dev/null && yum install -y nodejs 2>/dev/null || \
+    (curl -fsSL https://deb.nodesource.com/setup_18.x | bash - 2>/dev/null && apt-get install -y nodejs 2>/dev/null)
 fi
-mkdir -p $INSTALL_DIR/data
+cd $INSTALL_DIR/frontend
+npm install --registry=https://registry.npmmirror.com 2>/dev/null
+npm run build 2>/dev/null
+echo "✅ 前端构建完成"
+cd $INSTALL_DIR
 
-# 5. 初始化数据库
-echo ""
+# 4. 初始化数据库
 echo "🗄️ 初始化数据库..."
+mkdir -p $INSTALL_DIR/data
 cd $INSTALL_DIR/backend
-python3 -c "import asyncio; from database import init_db; asyncio.run(init_db())"
-echo "✅ 数据库初始化完成"
+PYTHONPATH=$INSTALL_DIR/backend:$INSTALL_DIR/core python3 -c "
+import asyncio; from database import init_db; asyncio.run(init_db())
+print('数据库初始化完成')
+"
+cd $INSTALL_DIR
 
-# 6. 配置 Nginx
-echo ""
+# 5. 安装/配置 Nginx
 echo "🌐 配置 Nginx..."
+if ! command -v nginx &> /dev/null; then
+    yum install -y nginx 2>/dev/null || apt-get install -y nginx 2>/dev/null
+fi
 cp $INSTALL_DIR/nginx.conf /etc/nginx/conf.d/ucloud-geo.conf
-# 移除可能冲突的默认配置
-nginx -t 2>/dev/null && echo "✅ Nginx 配置验证通过" || echo "⚠️ Nginx 配置有误，请检查"
+# 删除可能冲突的 default server
+rm -f /etc/nginx/sites-enabled/default 2>/dev/null
+# 修改 nginx.conf 中的 server 配置，确保没有冲突
+if grep -q "default_server" /etc/nginx/nginx.conf; then
+    sed -i 's/default_server//g' /etc/nginx/nginx.conf
+fi
+nginx -t 2>/dev/null && echo "✅ Nginx 配置验证通过"
 systemctl enable nginx
 systemctl restart nginx
 
-# 7. 配置 systemd 服务
-echo ""
+# 6. 配置 systemd 服务
 echo "⚡ 配置 systemd 服务..."
 cp $INSTALL_DIR/ucloud-geo.service /etc/systemd/system/
+# 更新 WorkingDirectory
+sed -i "s|/opt/ucloud-geo-eval|$INSTALL_DIR|g" /etc/systemd/system/ucloud-geo.service
 systemctl daemon-reload
 systemctl enable ucloud-geo
 systemctl restart ucloud-geo
 
-# 8. 完成
+# 7. 等待服务启动
+sleep 3
+STATUS=$(systemctl is-active ucloud-geo)
+
 echo ""
 echo "========================================="
-echo "  ✅ 部署完成！"
+if [ "$STATUS" = "active" ]; then
+    echo "  ✅ 部署成功！"
+else
+    echo "  ⚠️ 服务状态: $STATUS"
+    echo "  查看日志: journalctl -u ucloud-geo -n 50"
+fi
 echo "========================================="
 echo ""
-echo "  访问地址: http://$(hostname -I | awk '{print $1}')/"
-echo "  API文档:  http://$(hostname -I | awk '{print $1}')/api/docs"
+echo "  🌐 访问地址: http://$(hostname -I | awk '{print $1}')/"
+echo "  📖 API文档:  http://$(hostname -I | awk '{print $1}')/api/docs"
 echo ""
-echo "  常用命令:"
-echo "    查看服务状态: systemctl status ucloud-geo"
-echo "    查看日志:     journalctl -u ucloud-geo -f"
-echo "    重启服务:     systemctl restart ucloud-geo"
-echo "    重启Nginx:    systemctl restart nginx"
+echo "  首次使用请访问 设置页面 配置 API Keys"
 echo ""

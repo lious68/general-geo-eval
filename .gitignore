@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
+build/
+
+# Data
+data/
+output/
+
+# Node
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files from research
+*.html
+*.pdf
+*.ps1
+*.json
+!frontend/package*.json
+*.txt
+!README.md
+CUserslas*
+Userslas*
+parse_*.py
+CUserslas*

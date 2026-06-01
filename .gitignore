@@ -22,14 +22,16 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# Temp files from research
-*.html
-*.pdf
-*.ps1
-*.json
+# Temp files from research (project root only)
+/*.html
+/*.pdf
+/*.ps1
+/*.json
 !frontend/package*.json
-*.txt
+/*.txt
 !README.md
+# Keep frontend source HTML
+!frontend/index.html
 CUserslas*
 Userslas*
 parse_*.py

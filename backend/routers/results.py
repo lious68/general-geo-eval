@@ -227,6 +227,73 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
     return {"success": True, "data": by_model}
 
 
+@router.get("/{run_id}/question-drilldown")
+async def get_question_drilldown(run_id: str, model_key: str):
+    """问题级下钻：获取某渠道每道题的指标计数（分子/分母）和回答摘要"""
+    run = await db.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "评测不存在")
+
+    all_results = await db.get_results(run_id, model_key)
+    if not all_results:
+        return {"success": True, "data": {"model_name": model_key, "total_questions": 0, "questions": []}}
+
+    model_name = all_results[0].get("model_name", model_key)
+
+    # 关联 questions 表获取题目文本、品类、类型
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question, category, question_type FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = {"text": row["question"], "category": row["category"], "type": row["question_type"]}
+    finally:
+        await db_conn.close()
+
+    questions = []
+    for r in all_results:
+        qid = r["question_id"]
+        q_info = question_map.get(qid, {})
+        has_error = r.get("error_message") and r["error_message"] != ""
+
+        # 构建指标计数（分子/分母）
+        denom = 1  # 每题每个模型只回答一次
+        coverage_num = 1 if r.get("ucloud_mentioned") and not has_error else 0
+        citation_num = 1 if r.get("has_citation") and not has_error else 0
+        recommend_num = 1 if r.get("ucloud_recommended") and not has_error else 0
+        strength = r.get("recommendation_strength", "none") or "none"
+
+        # 回答摘要
+        raw = r.get("raw_content", "") or ""
+        summary = raw[:200] + ("..." if len(raw) > 200 else "") if raw else ""
+
+        questions.append({
+            "question_id": qid,
+            "question_text": q_info.get("text", qid),
+            "category": q_info.get("category", ""),
+            "question_type": q_info.get("type", ""),
+            "metrics": {
+                "coverage": {"numerator": coverage_num, "denominator": denom if not has_error else 0,
+                             "value": f"{coverage_num}/{denom}" if not has_error else "-"},
+                "citation": {"numerator": citation_num, "denominator": denom if not has_error else 0,
+                             "value": f"{citation_num}/{denom}" if not has_error else "-"},
+                "recommendation": {"numerator": recommend_num, "denominator": denom if not has_error else 0,
+                                   "value": f"{recommend_num}/{denom}" if not has_error else "-",
+                                   "strength": strength},
+                "sentiment": {"score": round(r.get("sentiment_score", 0.5), 4),
+                              "label": r.get("sentiment_label", "neutral")},
+            },
+            "mention_count": r.get("ucloud_mention_count", 0),
+            "position_weight": r.get("position_weight", 0),
+            "ucloud_rank": r.get("ucloud_rank"),
+            "response_summary": summary,
+            "has_error": has_error,
+            "error_message": r.get("error_message") if has_error else None,
+        })
+
+    return {"success": True, "data": {"model_name": model_name, "total_questions": len(questions), "questions": questions}}
+
+
 @router.post("/{run_id}/backfill-citations")
 async def backfill_citations(run_id: str):
     """从 raw_content 重新提取引用详情并回填 citations/all_cited_urls 列"""

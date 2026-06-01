@@ -242,6 +242,13 @@
                 {{ row.avg_rank ? row.avg_rank.toFixed(1) : '-' }}
               </template>
             </el-table-column>
+            <el-table-column label="明细" width="90" fixed="right">
+              <template #default="{ row }">
+                <el-button type="primary" link size="small" @click="openDrilldown(row.model_key)">
+                  📋 查看
+                </el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
       </div>
@@ -325,6 +332,94 @@
           </el-col>
         </el-row>
       </div>
+
+      <!-- 问题级下钻抽屉 -->
+      <el-drawer v-model="drawerVisible" :title="`${drilldownModelName} — 问题明细`" size="70%" direction="rtl" :destroy-on-close="true">
+        <div v-if="drilldownLoading" style="text-align:center;padding:40px">
+          <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+          <p style="color:#999;margin-top:8px">加载中...</p>
+        </div>
+        <template v-else-if="drilldownData">
+          <!-- 概览 -->
+          <div class="drilldown-header">
+            <span class="drilldown-total">共 <strong>{{ drilldownData.total_questions }}</strong> 题</span>
+            <span class="drilldown-filter-info" v-if="filterMetric !== 'all'">
+              · 筛选: {{ filterMetricLabel }} {{ filterCondition === 'gt0' ? '> 0' : '= 0' }}
+              · 命中 <strong>{{ filteredDrilldown.length }}</strong> 题
+            </span>
+          </div>
+
+          <!-- 筛选栏 -->
+          <div class="drilldown-filters">
+            <el-select v-model="filterMetric" placeholder="指标筛选" size="small" style="width:140px">
+              <el-option label="全部指标" value="all" />
+              <el-option label="覆盖率" value="coverage" />
+              <el-option label="引用率" value="citation" />
+              <el-option label="推荐率" value="recommendation" />
+              <el-option label="情感值" value="sentiment" />
+            </el-select>
+            <el-select v-model="filterCondition" placeholder="条件" size="small" style="width:120px;margin-left:8px" v-if="filterMetric !== 'all'">
+              <el-option label="全部" value="all" />
+              <el-option label="> 0（有值）" value="gt0" />
+              <el-option label="= 0（无值）" value="eq0" />
+            </el-select>
+          </div>
+
+          <!-- 问题列表 -->
+          <el-table :data="filteredDrilldown" stripe size="small" style="width:100%"
+            :default-sort="{ prop: 'question_id', order: 'ascending' }">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="expand-content">
+                  <div class="expand-label">题目：</div>
+                  <div class="expand-text">{{ row.question_text }}</div>
+                  <div class="expand-label" style="margin-top:8px">AI 回答摘要：</div>
+                  <div class="expand-text" v-if="row.response_summary">{{ row.response_summary }}</div>
+                  <div class="expand-text" v-else style="color:#999">（无回答内容）</div>
+                  <div v-if="row.error_message" class="expand-error">⚠️ 错误: {{ row.error_message }}</div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="question_id" label="题号" width="90" sortable />
+            <el-table-column label="品类" width="80">
+              <template #default="{ row }">
+                <el-tag size="small" :type="categoryTagType(row.category)">{{ row.category }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="覆盖率" width="80" sortable :sort-method="(a,b) => a.metrics.coverage.numerator - b.metrics.coverage.numerator">
+              <template #default="{ row }">
+                <span :class="row.metrics.coverage.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.coverage.value }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="引用率" width="80" sortable :sort-method="(a,b) => a.metrics.citation.numerator - b.metrics.citation.numerator">
+              <template #default="{ row }">
+                <span :class="row.metrics.citation.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.citation.value }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="推荐率" width="90" sortable :sort-method="(a,b) => a.metrics.recommendation.numerator - b.metrics.recommendation.numerator">
+              <template #default="{ row }">
+                <span :class="row.metrics.recommendation.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.recommendation.value }}</span>
+                <el-tag v-if="row.metrics.recommendation.strength !== 'none'" size="small"
+                  :type="row.metrics.recommendation.strength === 'strong' ? 'danger' : 'warning'"
+                  style="margin-left:4px;font-size:10px">
+                  {{ row.metrics.recommendation.strength === 'strong' ? '强' : '中' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="情感" width="80" sortable :sort-method="(a,b) => a.metrics.sentiment.score - b.metrics.sentiment.score">
+              <template #default="{ row }">
+                <span :class="sentimentClass(row.metrics.sentiment)">{{ row.metrics.sentiment.score.toFixed(2) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="提及" width="60" prop="mention_count" sortable>
+              <template #default="{ row }">{{ row.mention_count || 0 }}</template>
+            </el-table-column>
+            <el-table-column label="排名" width="60" prop="ucloud_rank" sortable>
+              <template #default="{ row }">{{ row.ucloud_rank || '-' }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </el-drawer>
     </template>
   </div>
 </template>
@@ -383,6 +478,71 @@ const channelMatrixData = computed(() => {
 })
 
 const radarRef = ref(null), barRef = ref(null), coverageRef = ref(null), sentimentRef = ref(null)
+
+// 下钻抽屉
+const drawerVisible = ref(false)
+const drilldownData = ref(null)
+const drilldownModelKey = ref('')
+const drilldownModelName = ref('')
+const drilldownLoading = ref(false)
+const filterMetric = ref('all')
+const filterCondition = ref('all')
+
+const filterMetricLabel = computed(() => {
+  const map = { coverage: '覆盖率', citation: '引用率', recommendation: '推荐率', sentiment: '情感值' }
+  return map[filterMetric.value] || ''
+})
+
+const filteredDrilldown = computed(() => {
+  if (!drilldownData.value || !drilldownData.value.questions) return []
+  const qs = drilldownData.value.questions
+  if (filterMetric.value === 'all' || filterCondition.value === 'all') return qs
+  const metric = filterMetric.value
+  const cond = filterCondition.value
+  return qs.filter(q => {
+    if (metric === 'sentiment') {
+      const score = q.metrics.sentiment.score
+      return cond === 'gt0' ? score > 0.5 : score <= 0.5
+    }
+    const num = q.metrics[metric]?.numerator || 0
+    return cond === 'gt0' ? num > 0 : num === 0
+  })
+})
+
+function categoryTagType(cat) {
+  const map = { '云计算': '', '云存储': 'success', '云数据库': 'warning', 'CDN': 'danger', 'AI服务': 'info',
+    '安全服务': 'danger', '大数据': 'success', '容器/K8s': 'warning', '行业方案': 'info', '性价比': '' }
+  return map[cat] || ''
+}
+
+function sentimentClass(sentiment) {
+  if (sentiment.label === 'positive') return 'val-hit'
+  if (sentiment.label === 'negative') return 'val-miss'
+  return 'val-neutral'
+}
+
+async function openDrilldown(modelKey) {
+  drilldownModelKey.value = modelKey
+  // 从 scores 中找到 model_name
+  const s = scores.value.find(s => s.model_key === modelKey)
+  drilldownModelName.value = s ? s.model_name : modelKey
+  drilldownData.value = null
+  filterMetric.value = 'all'
+  filterCondition.value = 'all'
+  drawerVisible.value = true
+  drilldownLoading.value = true
+
+  try {
+    const runId = latestRun.value?.id
+    if (!runId) return
+    const res = await apiFetch(`/results/${runId}/question-drilldown?model_key=${modelKey}`)
+    drilldownData.value = res.data || null
+  } catch (e) {
+    console.error('Drilldown error:', e)
+  } finally {
+    drilldownLoading.value = false
+  }
+}
 
 const rankedScores = computed(() => [...scores.value].sort((a, b) => b.geo_score - a.geo_score))
 
@@ -662,4 +822,17 @@ onMounted(loadData)
 
 /* ===== 渠道聚类区 ===== */
 .channel-clustering-section .el-card { height: 100%; }
+
+/* ===== 下钻抽屉 ===== */
+.drilldown-header { margin-bottom: 12px; font-size: 14px; color: #333; }
+.drilldown-total { margin-right: 8px; }
+.drilldown-filter-info { color: #999; font-size: 13px; }
+.drilldown-filters { margin-bottom: 12px; display: flex; align-items: center; }
+.val-hit { color: #67c23a; font-weight: 600; }
+.val-miss { color: #c0c4cc; }
+.val-neutral { color: #e6a23c; }
+.expand-content { padding: 8px 16px; background: #fafafa; }
+.expand-label { font-size: 12px; color: #909399; margin-bottom: 2px; }
+.expand-text { font-size: 13px; color: #333; line-height: 1.6; white-space: pre-wrap; }
+.expand-error { color: #f56c6c; font-size: 12px; margin-top: 6px; }
 </style>

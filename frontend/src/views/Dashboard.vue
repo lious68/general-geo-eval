@@ -168,9 +168,9 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">引用率 Citation Rate</div>
-                      <div class="formula-expr">引用率 = 包含UCloud引用/链接的响应数 / 有效响应总数</div>
-                      <div class="formula-desc">AI回答中主动给出 ucloud.cn 链接或明确引用UCloud来源的比例</div>
-                      <div class="formula-example">48条响应中8条含UCloud链接 → 8/48 = 16.7%</div>
+                      <div class="formula-expr">引用率 = 含 UCloud 官方来源或第三方来源引用的响应数 / 有效响应总数</div>
+                      <div class="formula-desc">官方来源直接计入；回答提及 UCloud 时，知乎、CSDN、掘金、GitHub、B站等第三方来源链接也计入</div>
+                      <div class="formula-example">36条自然有效响应中4条含有效来源引用 → 4/36 = 11.1%</div>
                       <div class="formula-weight">GEO权重: 25%</div>
                     </div>
                   </template>
@@ -555,9 +555,9 @@ const metricDefinitions = [
   {
     key: 'citation_rate', label: '引用率', icon: '🔗',
     brief: '包含UCloud引用/链接的响应比例',
-    formula: '引用率 = 包含UCloud引用的响应数 / 有效响应总数',
-    description: 'AI回答中主动给出 ucloud.cn 链接或明确引用 UCloud 来源的比例',
-    example: '如48条响应中有8条包含UCloud链接，则引用率=8/48=16.7%',
+    formula: '引用率 = 含 UCloud 官方来源或第三方来源引用的响应数 / 有效响应总数',
+    description: '官方来源直接计入；回答提及 UCloud 时，知乎、CSDN、掘金、GitHub、B站等第三方来源链接也计入',
+    example: '如36条自然有效响应中有4条含有效来源引用，则引用率=4/36=11.1%',
     weight: 25,
   },
   {

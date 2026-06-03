@@ -12,6 +12,49 @@ from typing import Optional, List, Dict, Any
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "geo.db")
 
 UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
+THIRD_PARTY_CITATION_DOMAINS = [
+    "zhihu.com", "csdn.net", "juejin.cn", "github.com", "bilibili.com",
+    "segmentfault.com", "oschina.net", "cnblogs.com", "infoq.cn", "51cto.com",
+    "mp.weixin.qq.com",
+]
+
+
+def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """返回按新引用口径计入的引用明细。"""
+    raw_citations = row.get("citations") or "[]"
+    raw_urls = row.get("all_cited_urls") or "[]"
+    try:
+        citations = json.loads(raw_citations) if isinstance(raw_citations, str) else (raw_citations or [])
+    except (json.JSONDecodeError, TypeError):
+        citations = []
+    try:
+        urls = json.loads(raw_urls) if isinstance(raw_urls, str) else (raw_urls or [])
+    except (json.JSONDecodeError, TypeError):
+        urls = []
+
+    effective = list(citations or [])
+    if row.get("ucloud_mentioned"):
+        seen = {
+            (c.get("citation_type"), c.get("content"), c.get("position"))
+            for c in effective if isinstance(c, dict)
+        }
+        for item in urls or []:
+            if not isinstance(item, dict) or item.get("citation_type") != "url":
+                continue
+            url = (item.get("content") or "").lower()
+            if not any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
+                continue
+            key = ("url", item.get("content"), item.get("position"))
+            if key in seen:
+                continue
+            effective.append({**item, "is_ucloud": bool(item.get("is_ucloud", False))})
+            seen.add(key)
+    return effective
+
+
+def has_effective_citation(row: Dict[str, Any]) -> bool:
+    """按新口径判断是否有有效引用：官方引用，或提及UCloud时的第三方来源引用。"""
+    return len(get_effective_citations(row)) > 0
 
 
 def _natural_question_filter_sql(alias: str = "q") -> str:
@@ -338,12 +381,8 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
         for row in rows:
             metrics_query = f"""
                 SELECT
-                    COUNT(*) AS valid_count,
-                    SUM(CASE WHEN ar.ucloud_mentioned=1 THEN 1 ELSE 0 END) AS mentioned_count,
-                    SUM(CASE WHEN ar.has_citation=1 THEN 1 ELSE 0 END) AS citation_count,
-                    SUM(CASE WHEN ar.ucloud_rank IS NOT NULL AND ar.ucloud_rank <= 3 THEN 1 ELSE 0 END) AS top3_count,
-                    AVG(CASE WHEN ar.ucloud_mentioned=1 THEN ar.sentiment_score ELSE NULL END) AS sentiment_avg,
-                    AVG(CASE WHEN ar.ucloud_rank IS NOT NULL THEN ar.ucloud_rank ELSE NULL END) AS avg_rank
+                    ar.*,
+                    q.question
                 FROM analysis_results ar
                 JOIN questions q ON q.id = ar.question_id
                 WHERE ar.run_id=?
@@ -357,18 +396,20 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
                 metrics_params.append(row["category"])
 
             metrics_cursor = await db.execute(metrics_query, metrics_params)
-            metrics_row = await metrics_cursor.fetchone()
-            valid_count = metrics_row["valid_count"] if metrics_row else 0
+            metric_rows = [dict(r) for r in await metrics_cursor.fetchall()]
+            valid_count = len(metric_rows)
             if valid_count:
-                mentioned_count = metrics_row["mentioned_count"] or 0
-                citation_count = metrics_row["citation_count"] or 0
-                top3_count = metrics_row["top3_count"] or 0
+                mentioned_count = sum(1 for r in metric_rows if r.get("ucloud_mentioned"))
+                citation_count = sum(1 for r in metric_rows if has_effective_citation(r))
+                top3_count = sum(1 for r in metric_rows if r.get("ucloud_rank") is not None and r.get("ucloud_rank") <= 3)
+                sentiment_values = [r.get("sentiment_score") or 0 for r in metric_rows if r.get("ucloud_mentioned")]
+                rank_values = [r.get("ucloud_rank") for r in metric_rows if r.get("ucloud_rank") is not None]
                 row["valid_responses"] = valid_count
                 row["coverage_rate"] = round(mentioned_count / valid_count, 4)
                 row["citation_rate"] = round(citation_count / valid_count, 4)
                 row["recommendation_rate"] = round(top3_count / valid_count, 4)
-                row["sentiment_score"] = round(metrics_row["sentiment_avg"] or 0, 4)
-                row["avg_rank"] = round(metrics_row["avg_rank"] or 0, 2)
+                row["sentiment_score"] = round(sum(sentiment_values) / len(sentiment_values), 4) if sentiment_values else 0
+                row["avg_rank"] = round(sum(rank_values) / len(rank_values), 2) if rank_values else 0
             else:
                 row["valid_responses"] = 0
                 row["coverage_rate"] = 0

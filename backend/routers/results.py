@@ -99,48 +99,36 @@ async def get_citation_details(run_id: str, model_key: str = None):
 
     all_results = await db.get_results(run_id, model_key)
 
+    # 关联 questions 表补充问题文本，同时识别自然问题
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = row["question"]
+    finally:
+        await db_conn.close()
+
     # 按模型分组
     by_model = {}
     for r in all_results:
-        # 仅保留有UCloud引用的记录
-        if not r.get("has_citation"):
+        # 仅保留自然问题中按新口径贡献引用率的记录
+        question_text = question_map.get(r["question_id"], "")
+        if not db.is_natural_question_text(question_text):
+            continue
+        citations_list = db.get_effective_citations(r)
+        if not citations_list:
             continue
 
         mk = r["model_key"]
         if mk not in by_model:
             by_model[mk] = {"model_name": r.get("model_name", mk), "citation_questions": []}
 
-        # 解析 citations JSON
-        citations_raw = r.get("citations", "[]")
-        if isinstance(citations_raw, str):
-            try:
-                citations_list = json.loads(citations_raw)
-            except (json.JSONDecodeError, TypeError):
-                citations_list = []
-        elif isinstance(citations_raw, list):
-            citations_list = citations_raw
-        else:
-            citations_list = []
-
         by_model[mk]["citation_questions"].append({
             "question_id": r["question_id"],
-            "question_text": "",  # 后续关联 questions 表补充
+            "question_text": question_text,
             "citations": citations_list,
         })
-
-    # 关联 questions 表补充问题文本
-    db_conn = await db.get_db()
-    try:
-        for mk_data in by_model.values():
-            for q in mk_data["citation_questions"]:
-                cursor = await db_conn.execute(
-                    "SELECT question FROM questions WHERE id=?", (q["question_id"],)
-                )
-                row = await cursor.fetchone()
-                if row:
-                    q["question_text"] = row["question"]
-    finally:
-        await db_conn.close()
 
     return {"success": True, "data": by_model}
 
@@ -158,10 +146,20 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
 
     all_results = await db.get_results(run_id, model_key)
 
+    # 关联 questions 表，引用渠道仅统计自然问题中按新口径贡献引用率的响应
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = row["question"]
+    finally:
+        await db_conn.close()
+
     by_model = {}
     for r in all_results:
-        # 仅统计UCloud被提及的响应（对GEO评分有贡献）
-        if not r.get("ucloud_mentioned"):
+        question_text = question_map.get(r["question_id"], "")
+        if not db.is_natural_question_text(question_text) or not db.has_effective_citation(r):
             continue
 
         mk = r["model_key"]
@@ -269,7 +267,7 @@ async def get_question_drilldown(run_id: str, model_key: str):
         # 构建指标计数（分子/分母）
         denom = 1  # 每题每个模型只回答一次
         coverage_num = 1 if r.get("ucloud_mentioned") and not has_error else 0
-        citation_num = 1 if r.get("has_citation") and not has_error else 0
+        citation_num = 1 if db.has_effective_citation(r) and not has_error else 0
         recommend_num = 1 if r.get("ucloud_rank") is not None and r.get("ucloud_rank") <= 3 and not has_error else 0
         strength = r.get("recommendation_strength", "none") or "none"
 

@@ -11,6 +11,12 @@ from config import BRAND_KEYWORDS, COMPETITOR_KEYWORDS, SCORE_CONFIG
 
 logger = logging.getLogger(__name__)
 
+THIRD_PARTY_CITATION_DOMAINS = [
+    "zhihu.com", "csdn.net", "juejin.cn", "github.com", "bilibili.com",
+    "segmentfault.com", "oschina.net", "cnblogs.com", "infoq.cn", "51cto.com",
+    "mp.weixin.qq.com",
+]
+
 
 @dataclass
 class BrandMention:
@@ -233,11 +239,30 @@ class ResponseAnalyzer:
                     is_ucloud=True,
                 ))
 
-        result.has_citation = len(result.citations) > 0
-        result.citation_count = len(result.citations)
-
         # 3. 检测所有URL（用于来源渠道聚类统计）
         self._detect_all_urls(content, result)
+
+        # 4. 回答提及 UCloud 时，知乎/CSDN/掘金/GitHub/B站等第三方来源也计入引用
+        if result.ucloud_mentioned:
+            seen = {(c.citation_type, c.content, c.position) for c in result.citations}
+            for url_info in result.all_cited_urls:
+                url = url_info.content.lower()
+                if not any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
+                    continue
+                key = ("url", url_info.content, url_info.position)
+                if key in seen:
+                    continue
+                result.citations.append(CitationInfo(
+                    citation_type="url",
+                    content=url_info.content,
+                    position=url_info.position,
+                    source_channel=url_info.source_channel,
+                    is_ucloud=False,
+                ))
+                seen.add(key)
+
+        result.has_citation = len(result.citations) > 0
+        result.citation_count = len(result.citations)
 
     def _detect_recommendations(self, content: str, result: AnalysisResult):
         """检测推荐信息"""

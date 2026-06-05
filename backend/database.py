@@ -53,7 +53,13 @@ def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     except (json.JSONDecodeError, TypeError):
         urls = []
 
-    effective = list(citations or [])
+    effective = []
+    for cit in citations or []:
+        if not isinstance(cit, dict):
+            continue
+        if cit.get("citation_type") == "url" and not is_ucloud_related_citation(row, cit):
+            continue
+        effective.append(cit)
     if row.get("ucloud_mentioned"):
         seen = {
             (c.get("citation_type"), c.get("content"), c.get("position"))

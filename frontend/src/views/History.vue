@@ -66,6 +66,9 @@
         <el-card>
           <div ref="trendChartRef" style="height:300px"></div>
         </el-card>
+        <el-card style="margin-top:16px">
+          <div ref="metricTrendChartRef" style="height:340px"></div>
+        </el-card>
       </div>
     </template>
   </div>
@@ -82,6 +85,7 @@ const router = useRouter()
 const runs = ref([])
 const loading = ref(true)
 const trendChartRef = ref(null)
+const metricTrendChartRef = ref(null)
 
 const completedRuns = computed(() => runs.value.filter(r => r.status === 'completed'))
 
@@ -119,6 +123,15 @@ function duration(row) {
   return `${Math.floor(mins / 60)}时${mins % 60}分`
 }
 
+function calcMetricAverages(scores) {
+  const keys = ['coverage_rate', 'citation_rate', 'recommendation_rate', 'sentiment_score']
+  if (!scores.length) return Object.fromEntries(keys.map(k => [k, 0]))
+  return Object.fromEntries(keys.map(k => {
+    const total = scores.reduce((sum, s) => sum + (Number(s[k]) || 0), 0)
+    return [k, total / scores.length]
+  }))
+}
+
 async function loadRuns() {
   loading.value = true
   try {
@@ -133,6 +146,7 @@ async function loadRuns() {
           const scores = scoresRes.data || []
           if (scores.length) {
             run.best_geo = Math.max(...scores.map(s => s.geo_score || 0))
+            run.metric_averages = calcMetricAverages(scores)
           }
         } catch { /* ignore */ }
       }
@@ -144,6 +158,7 @@ async function loadRuns() {
     await nextTick()
     if (completedRuns.value.length >= 2) {
       renderTrendChart()
+      renderMetricTrendChart()
     }
   } catch (e) {
     console.error('Load runs error:', e)
@@ -173,6 +188,39 @@ function renderTrendChart() {
       areaStyle: { color: 'rgba(64,158,255,0.1)' },
       label: { show: true, formatter: '{c}', fontSize: 12, fontWeight: 'bold' },
     }],
+  })
+  window.addEventListener('resize', () => chart.resize())
+}
+
+function renderMetricTrendChart() {
+  if (!metricTrendChartRef.value) return
+  const data = completedRuns.value.slice().reverse()
+
+  const dates = data.map(r => formatTime(r.started_at))
+  const metricDefs = [
+    { key: 'coverage_rate', name: '提及率', color: '#409eff' },
+    { key: 'citation_rate', name: '引用率', color: '#e6a23c' },
+    { key: 'recommendation_rate', name: 'TOP3 推荐率', color: '#f56c6c' },
+    { key: 'sentiment_score', name: '情感值', color: '#67c23a' },
+  ]
+
+  const chart = echarts.init(metricTrendChartRef.value)
+  chart.setOption({
+    title: { text: '仪表盘核心指标趋势（5渠道平均值）', left: 'center', top: 5, textStyle: { fontSize: 14 } },
+    tooltip: { trigger: 'axis', valueFormatter: value => `${Number(value).toFixed(1)}%` },
+    legend: { bottom: 0, data: metricDefs.map(m => m.name) },
+    grid: { left: 60, right: 30, top: 45, bottom: 55 },
+    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11 } },
+    yAxis: { type: 'value', name: '%', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
+    series: metricDefs.map(m => ({
+      name: m.name,
+      type: 'line',
+      data: data.map(r => Number(((r.metric_averages?.[m.key] || 0) * 100).toFixed(1))),
+      smooth: true,
+      itemStyle: { color: m.color },
+      lineStyle: { width: 2 },
+      label: { show: true, formatter: '{c}%', fontSize: 11 },
+    })),
   })
   window.addEventListener('resize', () => chart.resize())
 }

@@ -50,7 +50,7 @@ def build_bar_option(scores_list: List[Dict]) -> Dict:
         "title": {"text": "GEO 综合得分对比", "left": "center"},
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
         "xAxis": {"type": "category", "data": names, "axisLabel": {"fontSize": 14}},
-        "yAxis": {"type": "value", "name": "GEO Score", "max": lambda: max(values) * 1.3 + 5},
+        "yAxis": {"type": "value", "name": "GEO Score", "max": 100},
         "series": [{
             "type": "bar",
             "data": [{"value": v, "itemStyle": {"color": colors[i % len(colors)]}}

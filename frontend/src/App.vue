@@ -14,13 +14,13 @@
           <el-icon><VideoPlay /></el-icon>
           <span>执行评测</span>
         </el-menu-item>
+        <el-menu-item index="/history">
+          <el-icon><Clock /></el-icon>
+          <span>历史评测情况</span>
+        </el-menu-item>
         <el-menu-item index="/questions">
           <el-icon><Document /></el-icon>
           <span>问题管理</span>
-        </el-menu-item>
-        <el-menu-item index="/history">
-          <el-icon><Clock /></el-icon>
-          <span>历史记录</span>
         </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>

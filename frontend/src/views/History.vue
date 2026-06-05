@@ -1,6 +1,6 @@
 <template>
   <div class="history">
-    <h2 class="page-title">🕐 历史评测记录</h2>
+    <h2 class="page-title">🕐 历史评测情况</h2>
 
     <el-card v-if="!runs.length && !loading" style="text-align:center;padding:40px">
       <el-empty description="暂无评测记录" :image-size="80">

@@ -5,7 +5,7 @@
       <span>正在查看：</span>
       <el-tag size="small">{{ latestRun.name || 'GEO评估' }}</el-tag>
       <span style="color:#999;margin-left:4px">{{ formatRunTime(latestRun.started_at) }}</span>
-      <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史</el-button>
+      <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
     </div>
 
     <!-- 加载状态 -->

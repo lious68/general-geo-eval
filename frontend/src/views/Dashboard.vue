@@ -255,68 +255,6 @@
         </el-col>
       </el-row>
 
-      <!-- 引用详情（贡献GEO得分的引用） -->
-      <div class="citation-section" style="margin-top:20px" v-if="hasCitationData">
-        <h3 class="section-title">📎 引用详情（贡献 GEO 得分的引用）</h3>
-        <el-card>
-          <el-collapse v-model="activeCitationPanels">
-            <el-collapse-item v-for="(data, mk) in citationDetails" :key="mk" :name="mk">
-              <template #title>
-                <span class="collapse-title">{{ data.model_name }}</span>
-                <el-tag size="small" type="info" style="margin-left:8px">{{ data.citation_questions.length }} 条引用</el-tag>
-              </template>
-              <el-table :data="data.citation_questions" stripe size="small" style="width:100%">
-                <el-table-column label="问题" min-width="200">
-                  <template #default="{ row }">
-                    <span class="question-text">{{ row.question_text || row.question_id }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="引用内容" min-width="300">
-                  <template #default="{ row }">
-                    <div v-for="(cit, ci) in row.citations" :key="ci" class="citation-item">
-                      <el-tag v-if="cit.citation_type === 'url'" size="small" type="success" class="cit-type-tag">URL</el-tag>
-                      <el-tag v-else size="small" type="warning" class="cit-type-tag">文本引用</el-tag>
-                      <a v-if="cit.citation_type === 'url'" :href="cit.content" target="_blank" class="citation-url">{{ cit.content }}</a>
-                      <span v-else class="citation-ref">{{ cit.content }}</span>
-                      <el-tag v-if="cit.source_channel" size="small" type="info" class="cit-channel-tag">{{ cit.source_channel }}</el-tag>
-                    </div>
-                    <span v-if="!row.citations || !row.citations.length" style="color:#999">—</span>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-collapse-item>
-          </el-collapse>
-        </el-card>
-      </div>
-
-      <!-- 引用来源渠道聚类统计 -->
-      <div class="channel-clustering-section" style="margin-top:20px" v-if="hasChannelData">
-        <h3 class="section-title">📊 引用来源渠道聚类统计</h3>
-        <el-row :gutter="16">
-          <el-col :span="14">
-            <el-card>
-              <div ref="channelChartRef" style="height:350px"></div>
-            </el-card>
-          </el-col>
-          <el-col :span="10">
-            <el-card>
-              <template #header><strong>渠道 × 模型 引用矩阵</strong></template>
-              <el-table :data="channelMatrixData" stripe size="small" style="width:100%">
-                <el-table-column prop="channel" label="来源渠道" width="110" fixed />
-                <el-table-column v-for="col in channelMatrixCols" :key="col" :label="col" width="80" align="center">
-                  <template #default="{ row }">{{ row[col] || 0 }}</template>
-                </el-table-column>
-                <el-table-column label="合计" width="70" align="center">
-                  <template #default="{ row }">
-                    <strong>{{ channelMatrixCols.reduce((s, c) => s + (row[c] || 0), 0) }}</strong>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-card>
-          </el-col>
-        </el-row>
-      </div>
-
       <!-- 问题级下钻抽屉 -->
       <el-drawer v-model="drawerVisible" :title="`${drilldownModelName} — 问题明细`" size="70%" direction="rtl" :destroy-on-close="true">
         <div v-if="drilldownLoading" style="text-align:center;padding:40px">

@@ -303,10 +303,6 @@ async def _run_evaluation(
             for mk, wc_client in webchat_clients.items():
                 await wc_client.close()
             logger.info("WebChat browsers closed")
-                "type": "failed",
-                "run_id": run_id,
-                "error": str(e),
-            })
 
 
 async def _create_model_client(model_key: str, temperature: float = 0.7) -> Optional[ModelClient]:

@@ -92,21 +92,27 @@ class WebChatClientBase:
                 "timestamp": "",
             }
 
+        q_preview = question[:40] + ("..." if len(question) > 40 else "")
         try:
             # 每道题前重置对话
+            logger.info(f"WebChat {self.model_key}: 重置对话 → 准备提问: {q_preview}")
             await self._start_new_chat(self._page)
 
             # 输入问题
+            logger.info(f"WebChat {self.model_key}: 输入问题: {q_preview}")
             await self._type_question(self._page, question)
 
             # 发送
+            logger.info(f"WebChat {self.model_key}: 发送问题，等待响应...")
             await self._send_question(self._page)
 
             # 等待响应完成
             await self._wait_for_response(self._page, timeout=120)
 
             # 提取响应文本
+            logger.info(f"WebChat {self.model_key}: 提取响应文本...")
             text = await self._extract_response(self._page)
+            logger.info(f"WebChat {self.model_key}: 响应完成，长度={len(text)}字")
 
             return {
                 "model": self.model_key,

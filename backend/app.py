@@ -42,7 +42,9 @@ PUBLIC_PATHS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时初始化数据库"""
+    """应用生命周期：启动时初始化数据库 + 配置日志"""
+    import logging
+    logging.basicConfig(level=logging.INFO)
     await init_db()
     yield
 

@@ -10,6 +10,50 @@ from services.chart_builder import (
 
 router = APIRouter(prefix="/api/results", tags=["results"])
 
+# ── 第三方内容平台域名（知乎/CSDN/GitHub 等有具体内容的站点）──
+THIRD_PARTY_CONTENT_DOMAINS = [
+    "zhihu.com", "zhuanlan.zhihu.com",
+    "csdn.net", "blog.csdn.net",
+    "juejin.cn", "segmentfault.com", "jianshu.com",
+    "cnblogs.com", "infoq.cn", "oschina.net", "oscimg.com",
+    "github.com", "gitee.com",
+    "bilibili.com",
+    "stackoverflow.com", "readthedocs.io",
+    "mp.weixin.qq.com",
+    "51cto.com",
+]
+
+# ── URL 引用类型分类 ──
+def _classify_url_type(url: str) -> str:
+    """判断一条 URL 是「可能的信息来源」还是「AI生成的引用」。
+
+    规则：
+    - 第三方内容平台（知乎/CSDN/GitHub等）上有具体路径的页面 → "可能的信息来源"
+    - 首页级、产品页、API endpoint、云厂商官网 → "AI生成的引用"
+    """
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower().replace("www.", "")
+        path = parsed.path.rstrip("/")
+
+        # 第三方内容平台 + 有具体路径 → 可能的信息来源
+        is_third = any(d in domain for d in THIRD_PARTY_CONTENT_DOMAINS)
+        if is_third and len(path) > 5 and path not in ("", "/"):
+            return "可能的信息来源"
+
+        # API endpoint / 代码示例中的 endpoint → AI生成的引用
+        if domain.startswith("api.") or "/v1/" in path or "/api/" in path:
+            return "AI生成的引用"
+
+        # 首页级（空路径或极短路径）→ AI生成的引用
+        if path in ("", "/") or len(path) <= 5:
+            return "AI生成的引用"
+
+        # 其余：产品页、定价页、文档首页等，都属于AI生成的引用
+        return "AI生成的引用"
+    except Exception:
+        return "AI生成的引用"
+
 
 def _resolve_domain_label(url: str) -> str:
     """从 URL 提取域名，作为'其他'类的细化标签。"""
@@ -234,6 +278,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
                 "question_text": q_info.get("text", qid),
                 "question_category": q_info.get("category", ""),
                 "url": url_content,
+                "url_type": _classify_url_type(url_content),
             })
 
         # 也统计 citations 中 UCloud 的引用
@@ -269,6 +314,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
                 "question_text": q_info.get("text", qid),
                 "question_category": q_info.get("category", ""),
                 "url": url_content,
+                "url_type": _classify_url_type(url_content),
             })
 
     # 转换 channels dict 为列表并排序，同时提取 sample_urls
@@ -422,6 +468,7 @@ async def get_citation_drilldown(run_id: str, source_channel: str = Query(...)):
                 matching_urls.append({
                     "content": url_content,
                     "is_ucloud": url_info.get("is_ucloud", False),
+                    "url_type": _classify_url_type(url_content),
                 })
 
         # 从 citations 中查找
@@ -447,6 +494,7 @@ async def get_citation_drilldown(run_id: str, source_channel: str = Query(...)):
                     matching_urls.append({
                         "content": url_content,
                         "is_ucloud": cit.get("is_ucloud", False),
+                        "url_type": _classify_url_type(url_content),
                     })
 
         if not matching_urls:

@@ -104,6 +104,9 @@
             <el-table-column label="示例链接" min-width="320">
               <template #default="{ row }">
                 <div v-for="url in row.sample_urls.slice(0, 3)" :key="url" class="sample-url">
+                  <el-tag v-if="row.sample_url_types && row.sample_url_types[url]" :type="row.sample_url_types[url] === '可能的信息来源' ? 'warning' : 'info'" size="small" style="margin-right:4px">
+                    {{ row.sample_url_types[url] === '可能的信息来源' ? '信息来源' : 'AI引用' }}
+                  </el-tag>
                   <a :href="url" target="_blank">{{ url }}</a>
                 </div>
                 <span v-if="!row.sample_urls.length" style="color:#999">—</span>
@@ -136,6 +139,8 @@
                     <template #default="{ row }">
                       <div v-for="u in row.urls" :key="u.content" class="sample-url">
                         <el-tag v-if="u.is_ucloud" size="small" type="success" style="margin-right:4px">UCloud</el-tag>
+                        <el-tag v-if="u.url_type === '可能的信息来源'" size="small" type="warning" style="margin-right:4px">信息来源</el-tag>
+                        <el-tag v-else-if="u.url_type === 'AI生成的引用'" size="small" type="info" style="margin-right:4px">AI引用</el-tag>
                         <a :href="u.content" target="_blank">{{ u.content }}</a>
                       </div>
                     </template>
@@ -220,13 +225,18 @@ const filteredSources = computed(() => {
   const map = new Map()
   filteredRawRows.value.forEach(row => {
     if (!map.has(row.source)) {
-      map.set(row.source, { source: row.source, count: 0, platformMap: new Map(), sample_urls: [] })
+      map.set(row.source, { source: row.source, count: 0, platformMap: new Map(), sample_urls: [], sample_url_types: {} })
     }
     const item = map.get(row.source)
     item.count += row.count
     item.platformMap.set(platformDisplayName(row), (item.platformMap.get(platformDisplayName(row)) || 0) + row.count)
     row.sample_urls.forEach(url => {
-      if (item.sample_urls.length < 6 && !item.sample_urls.includes(url)) item.sample_urls.push(url)
+      if (item.sample_urls.length < 6 && !item.sample_urls.includes(url)) {
+        item.sample_urls.push(url)
+        // 从 question_details 中查找该 URL 的类型标签
+        const detail = row.question_details?.find(d => d.url === url)
+        item.sample_url_types[url] = detail?.url_type || 'AI生成的引用'
+      }
     })
   })
   return Array.from(map.values()).map(item => ({
@@ -234,6 +244,7 @@ const filteredSources = computed(() => {
     count: item.count,
     platforms: sortPlatforms(Array.from(item.platformMap.entries()).map(([name, count]) => ({ name, count }))),
     sample_urls: item.sample_urls,
+    sample_url_types: item.sample_url_types,
   })).sort((a, b) => b.count - a.count)
 })
 
@@ -292,6 +303,7 @@ async function loadData() {
               source: channel.channel || '其他',
               count: Number(channel.count) || 0,
               sample_urls: channel.sample_urls || [],
+              question_details: channel.question_details || [],
             })
           })
         })

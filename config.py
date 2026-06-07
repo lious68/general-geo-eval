@@ -181,11 +181,11 @@ SCORE_CONFIG = {
     },
     # GEO综合分数权重
     "geo_weights": {
-        "coverage_rate": 0.25,
-        "mention_rate": 0.15,
-        "citation_rate": 0.15,
-        "recommendation_rate": 0.25,
-        "sentiment_score": 0.20,
+        "coverage_rate": 0.45,
+        "mention_rate": 0.0,
+        "citation_rate": 0.25,
+        "recommendation_rate": 0.20,
+        "sentiment_score": 0.10,
     },
 }
 

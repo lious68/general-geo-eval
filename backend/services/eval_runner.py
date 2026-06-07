@@ -7,6 +7,7 @@ import sys
 import uuid
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -22,6 +23,15 @@ from analyzer import ResponseAnalyzer
 from metrics import MetricsCalculator
 
 logger = logging.getLogger(__name__)
+
+UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
+
+
+def _is_natural_question(question: str, category: str = "") -> bool:
+    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    if category == "引导型":
+        return False
+    return not UCLOUD_QUESTION_PATTERN.search(question or "")
 
 # 全局任务管理
 _active_tasks: Dict[str, asyncio.Task] = {}
@@ -176,12 +186,13 @@ async def _run_evaluation(
             if not all_results[mk]:
                 continue
 
-            # 全局评分
+            # 全局评分：提及率/TOP3 仅统计自然问题；引用率/情感值统计全部有效问题
             from analyzer import AnalysisResult
             results = [_dict_to_analysis(r) for r in all_results[mk]]
             scores = calculator.calculate_scores(results)
             scores_dict = _scores_to_dict(scores)
-            await save_geo_scores(run_id, mk, results[0].model_name if results else mk, None, scores_dict)
+            model_name = results[0].model_name if results else (all_results[mk][0].get("model_name") if all_results[mk] else mk)
+            await save_geo_scores(run_id, mk, model_name, None, scores_dict)
 
             # 品类评分
             categories = {}
@@ -199,7 +210,7 @@ async def _run_evaluation(
                 cat_analysis = [_dict_to_analysis(r) for r in cat_results]
                 cat_scores = calculator.calculate_scores(cat_analysis)
                 cat_dict = _scores_to_dict(cat_scores)
-                await save_geo_scores(run_id, mk, results[0].model_name if results else mk, cat, cat_dict)
+                await save_geo_scores(run_id, mk, model_name, cat, cat_dict)
 
         await update_run_status(run_id, "completed", completed)
 

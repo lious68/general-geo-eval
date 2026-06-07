@@ -1,13 +1,6 @@
 <template>
   <div class="dashboard">
     <h2 class="page-title">📊 GEO 评估仪表盘</h2>
-    <div v-if="latestRun && route.query.run_id" class="run-breadcrumb">
-      <span>正在查看：</span>
-      <el-tag size="small">{{ latestRun.name || 'GEO评估' }}</el-tag>
-      <span style="color:#999;margin-left:4px">{{ formatRunTime(latestRun.started_at) }}</span>
-      <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史</el-button>
-    </div>
-
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-state">
       <el-icon class="is-loading" :size="32"><Loading /></el-icon>
@@ -29,7 +22,7 @@
       <div class="metric-intro-section" style="margin-top:32px">
         <h3 class="section-title">GEO 评估指标说明</h3>
         <el-row :gutter="16">
-          <el-col :span="8" v-for="m in metricDefinitions" :key="m.key">
+          <el-col :span="6" v-for="m in metricDefinitions" :key="m.key">
             <el-card shadow="hover" class="intro-card">
               <div class="intro-card-header">
                 <span class="intro-icon">{{ m.icon }}</span>
@@ -56,11 +49,18 @@
     <!-- ===== 有数据时的完整仪表盘 ===== -->
     <template v-else>
 
-      <!-- 五大核心指标卡片 -->
+      <!-- 评测时间 -->
+      <div v-if="latestRun" class="run-breadcrumb">
+        <span>评测时间：</span>
+        <el-tag size="small" type="info">{{ formatRunTime(latestRun.completed_at || latestRun.started_at) }}</el-tag>
+        <el-button v-if="route.query.run_id" size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
+      </div>
+
+      <!-- 核心指标卡片 -->
       <div class="metric-cards-section">
         <h3 class="section-title">核心指标概览</h3>
         <el-row :gutter="16">
-          <el-col :span="4" v-for="m in coreMetrics" :key="m.key">
+          <el-col :span="5" v-for="m in coreMetrics" :key="m.key">
             <el-card shadow="hover" class="metric-card" :class="'metric-' + m.key">
               <div class="metric-card-header">
                 <span class="metric-icon">{{ m.icon }}</span>
@@ -79,7 +79,7 @@
                 </el-tooltip>
               </div>
               <div class="metric-value">{{ m.displayValue }}</div>
-              <div class="metric-best">最佳渠道: {{ m.bestModel || '-' }}</div>
+              <div class="metric-best">5渠道平均值</div>
               <div class="metric-bar-wrap">
                 <div class="metric-bar" :style="{ width: m.barPercent + '%' }"></div>
               </div>
@@ -95,19 +95,18 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分 - 计算公式</div>
-                      <div class="formula-expr">GEO = (覆盖率×25% + 提及率×15% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×45% + 引用率×25% + TOP3 推荐率×20% + 情感值×10%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘以100转换为0-100分制</div>
-                      <div class="formula-example">提及率归一化: min(提及率/3.0, 1.0)，即提及3次及以上为满分</div>
-                      <div class="formula-weight">加权系数: 覆盖率25%、提及率15%、引用率15%、推荐率25%、情感值20%</div>
+                      <div class="formula-weight">加权系数: 提及率45%、引用率25%、TOP3 推荐率20%、情感值10%</div>
                     </div>
                   </template>
                   <span class="formula-trigger">ⓘ</span>
                 </el-tooltip>
               </div>
-              <div class="metric-value geo-value">{{ geoBestScore }}</div>
-              <div class="metric-best">最佳渠道: {{ geoBestModel || '-' }}</div>
+              <div class="metric-value geo-value">{{ geoAverageScore }}</div>
+              <div class="metric-best">基于5渠道平均指标</div>
               <div class="metric-bar-wrap">
-                <div class="metric-bar geo-bar" :style="{ width: geoBestScore + '%' }"></div>
+                <div class="metric-bar geo-bar" :style="{ width: geoAverageScore + '%' }"></div>
               </div>
             </el-card>
           </el-col>
@@ -131,9 +130,8 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">GEO 综合得分</div>
-                      <div class="formula-expr">GEO = (覆盖率×25% + 提及率×15% + 引用率×15% + 推荐率×25% + 情感值×20%) × 100</div>
+                      <div class="formula-expr">GEO = (提及率×45% + 引用率×25% + TOP3 推荐率×20% + 情感值×10%) × 100</div>
                       <div class="formula-desc">各指标归一化到0-1后加权求和，再乘100转为0-100分制</div>
-                      <div class="formula-example">提及率归一化: min(提及率/3.0, 1.0)</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -145,15 +143,15 @@
             </el-table-column>
             <el-table-column width="120">
               <template #header>
-                <span>覆盖率</span>
+                <span>提及率</span>
                 <el-tooltip placement="top" effect="light" :width="300">
                   <template #content>
                     <div class="formula-tooltip">
-                      <div class="formula-title">覆盖率 Coverage Rate</div>
-                      <div class="formula-expr">覆盖率 = UCloud被提及的问题数 / 有效问题总数</div>
-                      <div class="formula-desc">在所有有效响应中，UCloud被提及（品牌名/产品名/别名）的问题占比</div>
-                      <div class="formula-example">48题中20题提及UCloud → 20/48 = 41.7%</div>
-                      <div class="formula-weight">GEO权重: 25%</div>
+                      <div class="formula-title">提及率 Mention Rate</div>
+                      <div class="formula-expr">提及率 = UCloud 被提及的自然有效响应数 / 自然有效响应总数</div>
+                      <div class="formula-desc">仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母</div>
+                      <div class="formula-example">48条有效响应中20条提及UCloud → 20/48 = 41.7%</div>
+                      <div class="formula-weight">GEO权重: 45%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -165,35 +163,15 @@
             </el-table-column>
             <el-table-column width="120">
               <template #header>
-                <span>提及率</span>
-                <el-tooltip placement="top" effect="light" :width="320">
-                  <template #content>
-                    <div class="formula-tooltip">
-                      <div class="formula-title">提及率 Mention Rate</div>
-                      <div class="formula-expr">提及率 = Σ(提及次数 × 位置权重) / 有效响应总数</div>
-                      <div class="formula-desc">综合考量提及频次和首次出现位置，越靠前权重越高</div>
-                      <div class="formula-example">位置权重: 首位1.0, 第2位0.8, 第3位0.6, 第4位0.4, 第5+位0.2</div>
-                      <div class="formula-weight">GEO权重: 15% (归一化: min(提及率/3.0, 1.0))</div>
-                    </div>
-                  </template>
-                  <span class="col-formula-trigger">ⓘ</span>
-                </el-tooltip>
-              </template>
-              <template #default="{ row }">
-                {{ row.mention_rate.toFixed(2) }}
-              </template>
-            </el-table-column>
-            <el-table-column width="120">
-              <template #header>
                 <span>引用率</span>
                 <el-tooltip placement="top" effect="light" :width="300">
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">引用率 Citation Rate</div>
-                      <div class="formula-expr">引用率 = 包含UCloud引用/链接的响应数 / 有效响应总数</div>
-                      <div class="formula-desc">AI回答中主动给出 ucloud.cn 链接或明确引用UCloud来源的比例</div>
-                      <div class="formula-example">48条响应中8条含UCloud链接 → 8/48 = 16.7%</div>
-                      <div class="formula-weight">GEO权重: 15%</div>
+                      <div class="formula-expr">引用率 = 含 UCloud 官方来源或第三方来源引用的响应数 / 有效响应总数</div>
+                      <div class="formula-desc">官方来源直接计入；回答提及 UCloud 时，知乎、CSDN、掘金、GitHub、B站等第三方来源链接也计入</div>
+                      <div class="formula-example">36条全部有效响应中4条含有效来源引用 → 4/36 = 11.1%</div>
+                      <div class="formula-weight">GEO权重: 25%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -205,15 +183,15 @@
             </el-table-column>
             <el-table-column width="120">
               <template #header>
-                <span>推荐率</span>
+                <span>TOP3 推荐率</span>
                 <el-tooltip placement="top" effect="light" :width="320">
                   <template #content>
                     <div class="formula-tooltip">
-                      <div class="formula-title">推荐率 Recommendation Rate</div>
-                      <div class="formula-expr">推荐率 = UCloud被推荐的响应数 / 有效响应总数</div>
-                      <div class="formula-desc">AI明确推荐UCloud作为首选或备选方案的响应占比</div>
-                      <div class="formula-example">强推荐=明确首推UCloud，中等推荐=列入推荐列表，弱推荐=顺带提及</div>
-                      <div class="formula-weight">GEO权重: 25%</div>
+                      <div class="formula-title">TOP3 推荐率 Top3 Recommendation Rate</div>
+                      <div class="formula-expr">TOP3 推荐率 = 品牌进入 Top3 的自然回答次数 / 自然有效回答总次数</div>
+                      <div class="formula-desc">仅统计自然问题中 UCloud 进入品牌推荐列表 Top3 的比例；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母</div>
+                      <div class="formula-example">48条有效回答中有12条进入Top3 → 12/48 = 25.0%</div>
+                      <div class="formula-weight">GEO权重: 20%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -230,10 +208,10 @@
                   <template #content>
                     <div class="formula-tooltip">
                       <div class="formula-title">情感值 Sentiment Score</div>
-                      <div class="formula-expr">情感值 = Σ(被提及响应的情感分数) / 被提及响应数</div>
-                      <div class="formula-desc">仅UCloud被提及时计算，范围0-1</div>
+                      <div class="formula-expr">情感值 = Σ(全部有效响应的情感分数) / 全部有效响应数</div>
+                      <div class="formula-desc">Q1-Q10 引导型问题正常显示并参与统计，范围0-1</div>
                       <div class="formula-example">&gt;0.6 正面，0.4~0.6 中性，&lt;0.4 负面</div>
-                      <div class="formula-weight">GEO权重: 20%</div>
+                      <div class="formula-weight">GEO权重: 10%</div>
                     </div>
                   </template>
                   <span class="col-formula-trigger">ⓘ</span>
@@ -277,81 +255,6 @@
         </el-col>
       </el-row>
 
-      <!-- 引用详情（贡献GEO得分的引用） -->
-      <div class="citation-section" style="margin-top:20px" v-if="hasCitationData">
-        <h3 class="section-title">📎 引用详情（贡献 GEO 得分的引用）</h3>
-        <el-card>
-          <el-collapse v-model="activeCitationPanels">
-            <el-collapse-item v-for="(data, mk) in citationDetails" :key="mk" :name="mk">
-              <template #title>
-                <span class="collapse-title">{{ data.model_name }}</span>
-                <el-tag size="small" type="info" style="margin-left:8px">{{ data.citation_questions.length }} 条引用</el-tag>
-              </template>
-              <el-table :data="data.citation_questions" stripe size="small" style="width:100%">
-                <el-table-column label="问题" min-width="200">
-                  <template #default="{ row }">
-                    <span class="question-text">{{ row.question_text || row.question_id }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="引用内容" min-width="300">
-                  <template #default="{ row }">
-                    <div v-for="(cit, ci) in row.citations" :key="ci" class="citation-item">
-                      <el-tag v-if="cit.citation_type === 'url'" size="small" type="success" class="cit-type-tag">URL</el-tag>
-                      <el-tag v-else size="small" type="warning" class="cit-type-tag">文本引用</el-tag>
-                      <a v-if="cit.citation_type === 'url'" :href="cit.content" target="_blank" class="citation-url">{{ cit.content }}</a>
-                      <span v-else class="citation-ref">{{ cit.content }}</span>
-                      <el-tag v-if="cit.source_channel" size="small" type="info" class="cit-channel-tag">{{ cit.source_channel }}</el-tag>
-                    </div>
-                    <span v-if="!row.citations || !row.citations.length" style="color:#999">—</span>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-collapse-item>
-          </el-collapse>
-        </el-card>
-      </div>
-
-      <!-- 引用来源渠道聚类统计 -->
-      <div class="channel-clustering-section" style="margin-top:20px" v-if="hasChannelData">
-        <h3 class="section-title">📊 引用来源渠道聚类统计</h3>
-        <el-row :gutter="16">
-          <el-col :span="14">
-            <el-card>
-              <div ref="channelChartRef" style="height:350px"></div>
-            </el-card>
-          </el-col>
-          <el-col :span="10">
-            <el-card>
-              <template #header><strong>渠道引用明细（点击渠道展开）</strong></template>
-              <el-collapse v-model="activeChannelPanels" accordion>
-                <el-collapse-item v-for="item in allChannelFlat" :key="item.key" :name="item.key">
-                  <template #title>
-                    <span class="channel-collapse-title">{{ item.channel }}</span>
-                    <el-tag size="small" style="margin-left:6px">{{ item.totalCount }} 条引用</el-tag>
-                  </template>
-                  <el-table :data="item.details" stripe size="small" style="width:100%">
-                    <el-table-column label="模型" width="80">
-                      <template #default="{ row }">{{ row.model_name }}</template>
-                    </el-table-column>
-                    <el-table-column label="问题" min-width="180">
-                      <template #default="{ row }">
-                        <span class="channel-q-text">{{ row.question_text || row.question_id }}</span>
-                        <el-tag size="small" style="margin-left:4px">{{ row.question_category }}</el-tag>
-                      </template>
-                    </el-table-column>
-                    <el-table-column label="引用URL" min-width="260">
-                      <template #default="{ row }">
-                        <a :href="row.url" target="_blank" class="channel-url">{{ row.url }}</a>
-                      </template>
-                    </el-table-column>
-                  </el-table>
-                </el-collapse-item>
-              </el-collapse>
-            </el-card>
-          </el-col>
-        </el-row>
-      </div>
-
       <!-- 问题级下钻抽屉 -->
       <el-drawer v-model="drawerVisible" :title="`${drilldownModelName} — 问题明细`" size="70%" direction="rtl" :destroy-on-close="true">
         <div v-if="drilldownLoading" style="text-align:center;padding:40px">
@@ -372,9 +275,9 @@
           <div class="drilldown-filters">
             <el-select v-model="filterMetric" placeholder="指标筛选" size="small" style="width:140px">
               <el-option label="全部指标" value="all" />
-              <el-option label="覆盖率" value="coverage" />
+              <el-option label="提及率" value="coverage" />
               <el-option label="引用率" value="citation" />
-              <el-option label="推荐率" value="recommendation" />
+              <el-option label="TOP3 推荐率" value="recommendation" />
               <el-option label="情感值" value="sentiment" />
             </el-select>
             <el-select v-model="filterCondition" placeholder="条件" size="small" style="width:120px;margin-left:8px" v-if="filterMetric !== 'all'">
@@ -392,8 +295,8 @@
                 <div class="expand-content">
                   <div class="expand-label">题目：</div>
                   <div class="expand-text">{{ row.question_text }}</div>
-                  <div class="expand-label" style="margin-top:8px">AI 回答摘要：</div>
-                  <div class="expand-text" v-if="row.response_summary">{{ row.response_summary }}</div>
+                  <div class="expand-label" style="margin-top:8px">AI 完整回答：</div>
+                  <div class="expand-text full-answer" v-if="row.response_content || row.response_summary">{{ row.response_content || row.response_summary }}</div>
                   <div class="expand-text" v-else style="color:#999">（无回答内容）</div>
                   <div v-if="row.error_message" class="expand-error">⚠️ 错误: {{ row.error_message }}</div>
                 </div>
@@ -405,7 +308,7 @@
                 <el-tag size="small" :type="categoryTagType(row.category)">{{ row.category }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="覆盖率" width="80" sortable :sort-method="(a,b) => a.metrics.coverage.numerator - b.metrics.coverage.numerator">
+            <el-table-column label="提及率" width="80" sortable :sort-method="(a,b) => a.metrics.coverage.numerator - b.metrics.coverage.numerator">
               <template #default="{ row }">
                 <span :class="row.metrics.coverage.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.coverage.value }}</span>
               </template>
@@ -415,14 +318,9 @@
                 <span :class="row.metrics.citation.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.citation.value }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="推荐率" width="90" sortable :sort-method="(a,b) => a.metrics.recommendation.numerator - b.metrics.recommendation.numerator">
+            <el-table-column label="TOP3 推荐率" width="120" sortable :sort-method="(a,b) => a.metrics.recommendation.numerator - b.metrics.recommendation.numerator">
               <template #default="{ row }">
                 <span :class="row.metrics.recommendation.numerator ? 'val-hit' : 'val-miss'">{{ row.metrics.recommendation.value }}</span>
-                <el-tag v-if="row.metrics.recommendation.strength !== 'none'" size="small"
-                  :type="row.metrics.recommendation.strength === 'strong' ? 'danger' : 'warning'"
-                  style="margin-left:4px;font-size:10px">
-                  {{ row.metrics.recommendation.strength === 'strong' ? '强' : '中' }}
-                </el-tag>
               </template>
             </el-table-column>
             <el-table-column label="情感" width="80" sortable :sort-method="(a,b) => a.metrics.sentiment.score - b.metrics.sentiment.score">
@@ -473,40 +371,37 @@ const channelChartRef = ref(null)
 const hasCitationData = computed(() => Object.keys(citationDetails.value).length > 0)
 const hasChannelData = computed(() => Object.keys(channelClustering.value).length > 0)
 
-// 渠道聚类矩阵数据（用于折叠列表）
-const activeChannelPanels = ref([])
-
-const allChannelFlat = computed(() => {
-  // 收集所有渠道，合并跨模型，为每个渠道列出所有 question_details
-  const channelMap = {} // channel -> { details: [{model_name, question_text, question_category, url}], totalCount }
-
+// 渠道聚类矩阵数据（用于表格）
+const channelMatrixCols = computed(() => {
+  const names = new Set()
   for (const mk in channelClustering.value) {
-    const model_name = channelClustering.value[mk].model_name
+    names.add(channelClustering.value[mk].model_name)
+  }
+  return [...names]
+})
+
+const channelMatrixData = computed(() => {
+  // 收集所有渠道名
+  const channelSet = new Set()
+  for (const mk in channelClustering.value) {
     for (const ch of channelClustering.value[mk].channels) {
-      if (!channelMap[ch.channel]) {
-        channelMap[ch.channel] = { details: [], totalCount: 0 }
-      }
-      channelMap[ch.channel].totalCount += ch.count
-      for (const d of (ch.question_details || [])) {
-        channelMap[ch.channel].details.push({
-          model_name,
-          question_id: d.question_id,
-          question_text: d.question_text,
-          question_category: d.question_category,
-          url: d.url,
-        })
-      }
+      channelSet.add(ch.channel)
     }
   }
-
-  return Object.entries(channelMap)
-    .map(([channel, data]) => ({
-      key: channel,
-      channel,
-      totalCount: data.totalCount,
-      details: data.details,
-    }))
-    .sort((a, b) => b.totalCount - a.totalCount)
+  // 构建矩阵行
+  return [...channelSet].map(channel => {
+    const row = { channel }
+    for (const mk in channelClustering.value) {
+      const mn = channelClustering.value[mk].model_name
+      const found = channelClustering.value[mk].channels.find(c => c.channel === channel)
+      row[mn] = found ? found.count : 0
+    }
+    return row
+  }).sort((a, b) => {
+    const totalA = channelMatrixCols.value.reduce((s, c) => s + (a[c] || 0), 0)
+    const totalB = channelMatrixCols.value.reduce((s, c) => s + (b[c] || 0), 0)
+    return totalB - totalA
+  })
 })
 
 const radarRef = ref(null), barRef = ref(null), coverageRef = ref(null), sentimentRef = ref(null)
@@ -521,7 +416,7 @@ const filterMetric = ref('all')
 const filterCondition = ref('all')
 
 const filterMetricLabel = computed(() => {
-  const map = { coverage: '覆盖率', citation: '引用率', recommendation: '推荐率', sentiment: '情感值' }
+  const map = { coverage: '提及率', citation: '引用率', recommendation: 'TOP3 推荐率', sentiment: '情感值' }
   return map[filterMetric.value] || ''
 })
 
@@ -588,82 +483,77 @@ const channelDetails = computed(() => {
 // ===== 指标定义（含公式说明） =====
 const metricDefinitions = [
   {
-    key: 'coverage_rate', label: '覆盖率', icon: '📡',
-    brief: 'UCloud 被提及的问题比例',
-    formula: '覆盖率 = UCloud被提及的问题数 / 有效问题总数',
-    description: '在所有有效响应中，UCloud 被提及（出现品牌名/产品名/别名）的问题占比',
-    example: '如48题中有20题提及UCloud，则覆盖率=20/48=41.7%',
-    weight: 25,
-  },
-  {
-    key: 'mention_rate', label: '提及率', icon: '💬',
-    brief: '平均每条响应中UCloud提及次数(含位置权重)',
-    formula: '提及率 = Σ(提及次数 × 位置权重) / 有效响应总数',
-    description: '综合考量提及频次和首次出现位置，越靠前位置权重越高',
-    example: '位置权重: 第1位=1.0, 第2位=0.8, 第3位=0.6, 第4位=0.4, 第5+位=0.2',
-    weight: 15,
+    key: 'coverage_rate', label: '提及率', icon: '📡',
+    brief: 'UCloud 被提及的有效响应比例',
+    formula: '提及率 = UCloud 被提及的自然有效响应数 / 自然有效响应总数',
+    description: '仅统计题干不自带 UCloud/优刻得 字眼的自然问题响应；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母',
+    example: '如48条有效响应中有20条提及UCloud，则提及率=20/48=41.7%',
+    weight: 45,
   },
   {
     key: 'citation_rate', label: '引用率', icon: '🔗',
     brief: '包含UCloud引用/链接的响应比例',
-    formula: '引用率 = 包含UCloud引用的响应数 / 有效响应总数',
-    description: 'AI回答中主动给出 ucloud.cn 链接或明确引用 UCloud 来源的比例',
-    example: '如48条响应中有8条包含UCloud链接，则引用率=8/48=16.7%',
-    weight: 15,
-  },
-  {
-    key: 'recommendation_rate', label: '推荐率', icon: '👍',
-    brief: 'UCloud被推荐的响应比例',
-    formula: '推荐率 = UCloud被推荐的响应数 / 有效响应总数',
-    description: 'AI明确推荐UCloud作为首选或备选方案的响应占比，含强推荐/中等推荐/弱推荐',
-    example: '强推荐=明确首推UCloud，中等推荐=将UCloud列入推荐列表',
+    formula: '引用率 = 含 UCloud 官方来源或第三方来源引用的响应数 / 有效响应总数',
+    description: '官方来源直接计入；回答提及 UCloud 时，知乎、CSDN、掘金、GitHub、B站等第三方来源链接也计入',
+    example: '如36条全部有效响应中有4条含有效来源引用，则引用率=4/36=11.1%',
     weight: 25,
   },
   {
-    key: 'sentiment_score', label: '情感值', icon: '💛',
-    brief: 'UCloud提及时的平均情感倾向',
-    formula: '情感值 = Σ(被提及响应的情感分数) / 被提及响应数',
-    description: '仅在UCloud被提及时计算，范围0-1，>0.6为正面，0.4-0.6为中性，<0.4为负面',
-    example: '如20条提及响应的平均情感为0.72，则情感值=0.72（偏正面）',
+    key: 'recommendation_rate', label: 'TOP3 推荐率', icon: '👍',
+    brief: '品牌进入 Top3 的回答比例',
+    formula: 'TOP3 推荐率 = 品牌进入 Top3 的自然回答次数 / 自然有效回答总次数',
+    description: '仅统计自然问题中 UCloud 在回答中进入品牌推荐列表 Top3 的比例；Q1-Q10 引导型问题明细中显示为 “-”，不进入总指标分母',
+    example: '如48条有效回答中有12条进入Top3，则TOP3推荐率=12/48=25.0%',
     weight: 20,
+  },
+  {
+    key: 'sentiment_score', label: '情感值', icon: '💛',
+    brief: '全部有效响应的平均情感倾向',
+    formula: '情感值 = Σ(全部有效响应的情感分数) / 全部有效响应数',
+    description: 'Q1-Q10 引导型问题正常显示并参与统计，范围0-1，>0.6为正面，0.4-0.6为中性，<0.4为负面',
+    example: '如20条提及响应的平均情感为0.72，则情感值=0.72（偏正面）',
+    weight: 10,
   },
 ]
 
 // ===== 计算核心指标卡片 =====
-function getBest(key) {
-  if (!scores.value.length) return null
-  return [...scores.value].sort((a, b) => b[key] - a[key])[0]
+function getMetricAverage(key) {
+  if (!scores.value.length) return 0
+  const total = scores.value.reduce((sum, s) => sum + (Number(s[key]) || 0), 0)
+  return total / scores.value.length
 }
 
 function formatMetricValue(key, raw) {
   if (key === 'coverage_rate' || key === 'citation_rate' || key === 'recommendation_rate') {
     return (raw * 100).toFixed(1) + '%'
   }
-  if (key === 'mention_rate') return raw.toFixed(2)
   if (key === 'sentiment_score') return raw.toFixed(2)
   return raw
 }
 
 const coreMetrics = computed(() => {
   return metricDefinitions.map(m => {
-    const best = getBest(m.key)
-    const raw = best ? best[m.key] : 0
+    const raw = getMetricAverage(m.key)
     return {
       ...m,
-      displayValue: best ? formatMetricValue(m.key, raw) : '-',
-      bestModel: best ? best.model_name : '',
+      displayValue: scores.value.length ? formatMetricValue(m.key, raw) : '-',
       barPercent: m.key === 'coverage_rate' || m.key === 'citation_rate' || m.key === 'recommendation_rate'
         ? raw * 100
-        : m.key === 'mention_rate' ? Math.min(raw / 3 * 100, 100)
         : m.key === 'sentiment_score' ? raw * 100
         : 0,
     }
   })
 })
 
-const geoBest = computed(() => getBest('geo_score'))
-const geoBestScore = computed(() => geoBest.value ? geoBest.value.geo_score.toFixed(1) : '-')
-const geoBestModel = computed(() => geoBest.value ? geoBest.value.model_name : '')
+const geoAverageRawScore = computed(() => {
+  if (!scores.value.length) return 0
+  const coverage = getMetricAverage('coverage_rate')
+  const citation = getMetricAverage('citation_rate')
+  const recommendation = getMetricAverage('recommendation_rate')
+  const sentiment = getMetricAverage('sentiment_score')
+  return (coverage * 0.45 + citation * 0.25 + recommendation * 0.20 + sentiment * 0.10) * 100
+})
+const geoAverageScore = computed(() => scores.value.length ? geoAverageRawScore.value.toFixed(1) : '-')
 
 // ===== 图表渲染 =====
 function renderChart(domRef, option) {
@@ -802,7 +692,6 @@ onMounted(loadData)
 .metric-bar-wrap { height: 4px; background: #eee; border-radius: 2px; overflow: hidden; }
 .metric-bar { height: 100%; border-radius: 2px; transition: width 0.6s ease; }
 .metric-coverage_rate .metric-bar { background: #409eff; }
-.metric-mention_rate .metric-bar { background: #67c23a; }
 .metric-citation_rate .metric-bar { background: #e6a23c; }
 .metric-recommendation_rate .metric-bar { background: #f56c6c; }
 .metric-sentiment_score .metric-bar { background: #f5c542; }
@@ -866,10 +755,6 @@ onMounted(loadData)
 
 /* ===== 渠道聚类区 ===== */
 .channel-clustering-section .el-card { height: 100%; }
-.channel-collapse-title { font-weight: 600; font-size: 14px; }
-.channel-q-text { font-size: 12px; color: #333; }
-.channel-url { color: #409eff; text-decoration: none; font-size: 12px; word-break: break-all; }
-.channel-url:hover { text-decoration: underline; }
 
 /* ===== 下钻抽屉 ===== */
 .drilldown-header { margin-bottom: 12px; font-size: 14px; color: #333; }
@@ -882,5 +767,6 @@ onMounted(loadData)
 .expand-content { padding: 8px 16px; background: #fafafa; }
 .expand-label { font-size: 12px; color: #909399; margin-bottom: 2px; }
 .expand-text { font-size: 13px; color: #333; line-height: 1.6; white-space: pre-wrap; }
+.full-answer { max-height: none; overflow: visible; }
 .expand-error { color: #f56c6c; font-size: 12px; margin-top: 6px; }
 </style>

@@ -82,8 +82,8 @@ const useModelverse = ref(false)
 const mvBaseUrl = ref('https://api.modelverse.cn/v1')
 const mvKeyPreview = ref('')
 const mvLoading = ref(false)
-const weights = reactive({ coverage_rate: 0.25, mention_rate: 0.15, citation_rate: 0.15, recommendation_rate: 0.25, sentiment_score: 0.20 })
-const weightLabels = { coverage_rate: '覆盖率', mention_rate: '提及率', citation_rate: '引用率', recommendation_rate: '推荐率', sentiment_score: '情感值' }
+const weights = reactive({ coverage_rate: 0.45, mention_rate: 0.0, citation_rate: 0.25, recommendation_rate: 0.20, sentiment_score: 0.10 })
+const weightLabels = { coverage_rate: '提及率', mention_rate: '原提及频次', citation_rate: '引用率', recommendation_rate: 'TOP3 推荐率', sentiment_score: '情感值' }
 
 async function loadModels() {
   try {

@@ -59,11 +59,11 @@ class MetricsCalculator:
 
     # 综合GEO分数的权重配置
     GEO_WEIGHTS = {
-        "coverage_rate": 0.25,        # 覆盖率权重
-        "mention_rate": 0.15,         # 提及率权重
-        "citation_rate": 0.15,        # 引用率权重
-        "recommendation_rate": 0.25,  # 推荐率权重
-        "sentiment_score": 0.20,      # 情感值权重
+        "coverage_rate": 0.45,        # 提及率权重（UCloud被提及的有效响应占比）
+        "mention_rate": 0.0,          # 原提及频次指标已不参与GEO综合得分
+        "citation_rate": 0.25,        # 引用率权重
+        "recommendation_rate": 0.20,  # TOP3推荐率权重
+        "sentiment_score": 0.10,      # 情感值权重
     }
 
     def calculate_scores(self, results: List[AnalysisResult]) -> GEOScores:
@@ -106,10 +106,13 @@ class MetricsCalculator:
         cited_count = sum(1 for r in valid_results if r.has_citation)
         scores.citation_rate = round(cited_count / len(valid_results), 4)
 
-        # ---- 推荐率 ----
-        # UCloud被推荐的响应数 / 有效响应总数
-        recommended_count = sum(1 for r in valid_results if r.ucloud_recommended)
-        scores.recommendation_rate = round(recommended_count / len(valid_results), 4)
+        # ---- TOP3 推荐率 ----
+        # UCloud进入品牌推荐列表Top3的响应数 / 有效响应总数
+        top3_count = sum(
+            1 for r in valid_results
+            if r.ucloud_rank is not None and r.ucloud_rank <= 3
+        )
+        scores.recommendation_rate = round(top3_count / len(valid_results), 4)
 
         # 细分推荐强度
         strong_count = sum(
@@ -159,16 +162,14 @@ class MetricsCalculator:
     def _calculate_geo_score(self, scores: GEOScores) -> float:
         """计算综合GEO分数（0-100）"""
         # 各指标归一化到0-1范围
-        coverage = scores.coverage_rate  # 0-1
-        mention = min(scores.mention_rate / 3.0, 1.0)  # 归一化，3次以上为满分
+        coverage = scores.coverage_rate  # 0-1，仪表盘显示为提及率
         citation = scores.citation_rate  # 0-1
-        recommendation = scores.recommendation_rate  # 0-1
+        recommendation = scores.recommendation_rate  # 0-1，TOP3推荐率
         sentiment = scores.sentiment_score  # 0-1
 
         # 加权求和
         weighted_sum = (
             coverage * self.GEO_WEIGHTS["coverage_rate"] +
-            mention * self.GEO_WEIGHTS["mention_rate"] +
             citation * self.GEO_WEIGHTS["citation_rate"] +
             recommendation * self.GEO_WEIGHTS["recommendation_rate"] +
             sentiment * self.GEO_WEIGHTS["sentiment_score"]

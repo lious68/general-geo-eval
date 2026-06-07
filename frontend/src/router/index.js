@@ -8,6 +8,7 @@ const routes = [
   { path: '/evaluation', name: 'Evaluation', component: () => import('../views/Evaluation.vue') },
   { path: '/questions', name: 'Questions', component: () => import('../views/Questions.vue') },
   { path: '/history', name: 'History', component: () => import('../views/History.vue') },
+  { path: '/citation-sources', name: 'CitationSources', component: () => import('../views/CitationSources.vue') },
   { path: '/settings', name: 'Settings', component: () => import('../views/Settings.vue') },
 ]
 

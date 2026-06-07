@@ -4,6 +4,8 @@ import json
 import database as db
 import models
 
+QUESTION_TYPES = ["品牌词", "品类词", "对比词", "场景词"]
+
 router = APIRouter(prefix="/api/questions", tags=["questions"])
 
 
@@ -32,9 +34,7 @@ async def list_categories():
 @router.get("/types")
 async def list_types():
     """列出所有问题类型"""
-    questions = await db.get_questions(active_only=True)
-    types = list(dict.fromkeys(q["question_type"] for q in questions))
-    return {"success": True, "data": types}
+    return {"success": True, "data": QUESTION_TYPES}
 
 
 @router.post("")

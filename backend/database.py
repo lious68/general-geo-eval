@@ -4,11 +4,109 @@ SQLite 异步数据库，管理评测、结果、问题、设置
 """
 import os
 import json
+import re
 import aiosqlite
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "geo.db")
+
+UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
+UCLOUD_CONTEXT_PATTERN = re.compile(
+    r"u\s*cloud|优\s*刻\s*得|优刻得|UCloudStack|UCloud云|优刻得云|"
+    r"UHost|UFile|UDisk|UNet|UDB|UCache|UAI|US3|UEC|UCloudStack",
+    re.IGNORECASE,
+)
+THIRD_PARTY_CITATION_DOMAINS = [
+    "zhihu.com", "csdn.net", "juejin.cn", "github.com", "bilibili.com",
+    "segmentfault.com", "oschina.net", "cnblogs.com", "infoq.cn", "51cto.com",
+    "mp.weixin.qq.com",
+]
+
+
+def is_ucloud_related_citation(row: Dict[str, Any], item: Dict[str, Any], window: int = 180) -> bool:
+    """判断第三方引用 URL 附近上下文是否在讲 UCloud/优刻得。"""
+    if item.get("is_ucloud"):
+        return True
+    content = row.get("raw_content") or ""
+    position = item.get("position")
+    if not content or position is None:
+        return False
+    try:
+        pos = int(position)
+    except (TypeError, ValueError):
+        return False
+    context = content[max(0, pos - window): min(len(content), pos + window)]
+    return bool(UCLOUD_CONTEXT_PATTERN.search(context))
+
+
+def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """返回按新引用口径计入的引用明细。"""
+    raw_citations = row.get("citations") or "[]"
+    raw_urls = row.get("all_cited_urls") or "[]"
+    try:
+        citations = json.loads(raw_citations) if isinstance(raw_citations, str) else (raw_citations or [])
+    except (json.JSONDecodeError, TypeError):
+        citations = []
+    try:
+        urls = json.loads(raw_urls) if isinstance(raw_urls, str) else (raw_urls or [])
+    except (json.JSONDecodeError, TypeError):
+        urls = []
+
+    effective = []
+    for cit in citations or []:
+        if not isinstance(cit, dict):
+            continue
+        if cit.get("citation_type") == "url" and not is_ucloud_related_citation(row, cit):
+            continue
+        effective.append(cit)
+    if row.get("ucloud_mentioned"):
+        seen = {
+            (c.get("citation_type"), c.get("content"), c.get("position"))
+            for c in effective if isinstance(c, dict)
+        }
+        for item in urls or []:
+            if not isinstance(item, dict) or item.get("citation_type") != "url":
+                continue
+            url = (item.get("content") or "").lower()
+            if not any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
+                continue
+            if not is_ucloud_related_citation(row, item):
+                continue
+            key = ("url", item.get("content"), item.get("position"))
+            if key in seen:
+                continue
+            effective.append({**item, "is_ucloud": bool(item.get("is_ucloud", False))})
+            seen.add(key)
+    return effective
+
+
+def has_effective_citation(row: Dict[str, Any]) -> bool:
+    """按新口径判断是否有有效引用：官方引用，或提及UCloud时的第三方来源引用。"""
+    return len(get_effective_citations(row)) > 0
+
+
+def _natural_question_filter_sql(alias: str = "q") -> str:
+    """排除引导型及题干自带 UCloud/优刻得 字眼的问题，仅统计自然问题。"""
+    q = f"{alias}.question"
+    c = f"{alias}.category"
+    return (
+        f"(({c} IS NULL OR {c} != '引导型') AND (({q} IS NULL) OR ("
+        f"LOWER(REPLACE({q}, ' ', '')) NOT LIKE '%ucloud%' "
+        f"AND REPLACE({q}, ' ', '') NOT LIKE '%优刻得%')))"
+    )
+
+
+def is_natural_question(question: str, category: str = "") -> bool:
+    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    if category == "引导型":
+        return False
+    return not UCLOUD_QUESTION_PATTERN.search(question or "")
+
+
+def is_natural_question_text(question: str) -> bool:
+    """题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    return is_natural_question(question)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS evaluation_runs (
@@ -312,8 +410,70 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
         else:
             query += " AND category IS NULL"
         cursor = await db.execute(query, params)
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        rows = [dict(r) for r in await cursor.fetchall()]
+
+        # 动态按最新口径回填指标，历史评测无需重跑：
+        # - 提及率 / TOP3 推荐率：分母只算自然问题
+        # - 引用率 / 情感值：分母使用全部有效问题
+        for row in rows:
+            metrics_query = """
+                SELECT
+                    ar.*,
+                    q.question,
+                    q.category
+                FROM analysis_results ar
+                JOIN questions q ON q.id = ar.question_id
+                WHERE ar.run_id=?
+                  AND ar.model_key=?
+                  AND (ar.error_message IS NULL OR ar.error_message='')
+            """
+            metrics_params = [run_id, row["model_key"]]
+            if row.get("category"):
+                metrics_query += " AND q.category=?"
+                metrics_params.append(row["category"])
+
+            metrics_cursor = await db.execute(metrics_query, metrics_params)
+            metric_rows = [dict(r) for r in await metrics_cursor.fetchall()]
+            all_valid_count = len(metric_rows)
+            natural_rows = [
+                r for r in metric_rows
+                if is_natural_question(r.get("question", ""), r.get("category", ""))
+            ]
+            natural_valid_count = len(natural_rows)
+
+            row["valid_responses"] = all_valid_count
+            if natural_valid_count:
+                mentioned_count = sum(1 for r in natural_rows if r.get("ucloud_mentioned"))
+                top3_count = sum(
+                    1 for r in natural_rows
+                    if r.get("ucloud_rank") is not None and r.get("ucloud_rank") <= 3
+                )
+                rank_values = [r.get("ucloud_rank") for r in natural_rows if r.get("ucloud_rank") is not None]
+                row["coverage_rate"] = round(mentioned_count / natural_valid_count, 4)
+                row["recommendation_rate"] = round(top3_count / natural_valid_count, 4)
+                row["avg_rank"] = round(sum(rank_values) / len(rank_values), 2) if rank_values else 0
+            else:
+                row["coverage_rate"] = 0
+                row["recommendation_rate"] = 0
+                row["avg_rank"] = 0
+
+            if all_valid_count:
+                citation_count = sum(1 for r in metric_rows if has_effective_citation(r))
+                sentiment_values = [r.get("sentiment_score") or 0 for r in metric_rows]
+                row["citation_rate"] = round(citation_count / all_valid_count, 4)
+                row["sentiment_score"] = round(sum(sentiment_values) / all_valid_count, 4)
+            else:
+                row["citation_rate"] = 0
+                row["sentiment_score"] = 0
+
+            row["geo_score"] = round((
+                (row.get("coverage_rate") or 0) * 0.45 +
+                (row.get("citation_rate") or 0) * 0.25 +
+                (row.get("recommendation_rate") or 0) * 0.20 +
+                (row.get("sentiment_score") or 0) * 0.10
+            ) * 100, 2)
+
+        return rows
     finally:
         await db.close()
 

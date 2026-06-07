@@ -6,15 +6,14 @@ from typing import Dict, List, Any
 
 
 def build_radar_option(scores_list: List[Dict]) -> Dict:
-    """雷达图：5维指标对比"""
-    categories = ["覆盖率", "提及率", "引用率", "推荐率", "情感值"]
+    """雷达图：4维指标对比"""
+    categories = ["提及率", "引用率", "TOP3 推荐率", "情感值"]
     colors = ["#0f3460", "#e94560", "#533483", "#f5a623", "#7ed321"]
 
     series_data = []
     for i, s in enumerate(scores_list):
         values = [
             round(s["coverage_rate"], 3),
-            round(min(s["mention_rate"] / 3.0, 1.0), 3),
             round(s["citation_rate"], 3),
             round(s["recommendation_rate"], 3),
             round(s["sentiment_score"], 3),
@@ -51,7 +50,7 @@ def build_bar_option(scores_list: List[Dict]) -> Dict:
         "title": {"text": "GEO 综合得分对比", "left": "center"},
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
         "xAxis": {"type": "category", "data": names, "axisLabel": {"fontSize": 14}},
-        "yAxis": {"type": "value", "name": "GEO Score", "max": lambda: max(values) * 1.3 + 5},
+        "yAxis": {"type": "value", "name": "GEO Score", "max": 100},
         "series": [{
             "type": "bar",
             "data": [{"value": v, "itemStyle": {"color": colors[i % len(colors)]}}
@@ -63,19 +62,19 @@ def build_bar_option(scores_list: List[Dict]) -> Dict:
 
 
 def build_coverage_option(scores_list: List[Dict]) -> Dict:
-    """分组柱状图：覆盖率/引用率/推荐率"""
+    """分组柱状图：提及率/引用率/TOP3推荐率"""
     colors = ["#0f3460", "#e94560", "#533483"]
     names = [s["model_name"] for s in scores_list]
 
     return {
         "title": {"text": "核心指标对比", "left": "center"},
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-        "legend": {"bottom": 0, "data": ["覆盖率", "引用率", "推荐率"]},
+        "legend": {"bottom": 0, "data": ["提及率", "引用率", "TOP3 推荐率"]},
         "xAxis": {"type": "category", "data": names},
         "yAxis": {"type": "value", "name": "%", "axisLabel": {"formatter": "{value}%"}},
         "series": [
             {
-                "name": "覆盖率",
+                "name": "提及率",
                 "type": "bar",
                 "data": [round(s["coverage_rate"] * 100, 1) for s in scores_list],
                 "itemStyle": {"color": colors[0]},
@@ -89,7 +88,7 @@ def build_coverage_option(scores_list: List[Dict]) -> Dict:
                 "label": {"show": True, "position": "top", "formatter": "{c}%"},
             },
             {
-                "name": "推荐率",
+                "name": "TOP3 推荐率",
                 "type": "bar",
                 "data": [round(s["recommendation_rate"] * 100, 1) for s in scores_list],
                 "itemStyle": {"color": colors[2]},
@@ -110,7 +109,7 @@ def build_sentiment_option(results_by_model: Dict[str, List[Dict]]) -> Dict:
             continue
         name = results[0].get("model_name", mk)
         model_names.append(name)
-        mentioned = [r for r in results if r.get("ucloud_mentioned") and not r.get("error_message")]
+        mentioned = [r for r in results if not r.get("error_message")]
         total = len(mentioned) or 1
         pos_data.append(round(sum(1 for r in mentioned if r.get("sentiment_label") == "positive") / total * 100, 1))
         neu_data.append(round(sum(1 for r in mentioned if r.get("sentiment_label") == "neutral") / total * 100, 1))

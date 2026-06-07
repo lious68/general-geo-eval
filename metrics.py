@@ -59,12 +59,19 @@ class MetricsCalculator:
 
     # 综合GEO分数的权重配置
     GEO_WEIGHTS = {
-        "coverage_rate": 0.25,        # 覆盖率权重
-        "mention_rate": 0.15,         # 提及率权重
-        "citation_rate": 0.15,        # 引用率权重
-        "recommendation_rate": 0.25,  # 推荐率权重
-        "sentiment_score": 0.20,      # 情感值权重
+        "coverage_rate": 0.45,        # 提及率权重（UCloud被提及的有效响应占比）
+        "mention_rate": 0.0,          # 原提及频次指标已不参与GEO综合得分
+        "citation_rate": 0.25,        # 引用率权重
+        "recommendation_rate": 0.20,  # TOP3推荐率权重
+        "sentiment_score": 0.10,      # 情感值权重
     }
+
+    def _is_natural_question_id(self, question_id: str) -> bool:
+        """按默认题号识别自然问题：Q1-Q10（q001-q010）为引导型。"""
+        qid = (question_id or "").lower()
+        if qid.startswith("q") and qid[1:].isdigit():
+            return int(qid[1:]) > 10
+        return True
 
     def calculate_scores(self, results: List[AnalysisResult]) -> GEOScores:
         """计算一组分析结果的GEO评分"""
@@ -81,57 +88,61 @@ class MetricsCalculator:
         if not valid_results:
             return scores
 
+        natural_results = [r for r in valid_results if self._is_natural_question_id(r.question_id)]
+
         # ---- 覆盖率 ----
-        # UCloud被提及的问题数 / 有效问题总数
-        mentioned_count = sum(1 for r in valid_results if r.ucloud_mentioned)
-        scores.coverage_rate = round(mentioned_count / len(valid_results), 4)
+        # UCloud被提及的自然问题数 / 自然有效问题总数
+        if natural_results:
+            mentioned_count = sum(1 for r in natural_results if r.ucloud_mentioned)
+            scores.coverage_rate = round(mentioned_count / len(natural_results), 4)
+        else:
+            scores.coverage_rate = 0.0
 
         # ---- 提及率 ----
-        # 平均每条响应中的UCloud提及次数（含位置权重调整）
+        # 平均每条自然响应中的UCloud提及次数（含位置权重调整）
         weighted_mentions = []
-        for r in valid_results:
+        for r in natural_results:
             if r.ucloud_mentioned:
                 weighted_mentions.append(r.ucloud_mention_count * r.position_weight)
             else:
                 weighted_mentions.append(0)
         scores.mention_rate = round(
-            sum(weighted_mentions) / len(valid_results), 4
-        )
+            sum(weighted_mentions) / len(natural_results), 4
+        ) if natural_results else 0.0
         scores.avg_mention_count = round(
-            sum(r.ucloud_mention_count for r in valid_results) / len(valid_results), 4
-        )
+            sum(r.ucloud_mention_count for r in natural_results) / len(natural_results), 4
+        ) if natural_results else 0.0
 
         # ---- 引用率 ----
-        # 包含UCloud引用的响应数 / 有效响应总数
+        # 包含UCloud引用的响应数 / 全部有效响应总数
         cited_count = sum(1 for r in valid_results if r.has_citation)
         scores.citation_rate = round(cited_count / len(valid_results), 4)
 
-        # ---- 推荐率 ----
-        # UCloud被推荐的响应数 / 有效响应总数
-        recommended_count = sum(1 for r in valid_results if r.ucloud_recommended)
-        scores.recommendation_rate = round(recommended_count / len(valid_results), 4)
+        # ---- TOP3 推荐率 ----
+        # UCloud进入品牌推荐列表Top3的自然响应数 / 自然有效响应总数
+        top3_count = sum(
+            1 for r in natural_results
+            if r.ucloud_rank is not None and r.ucloud_rank <= 3
+        )
+        scores.recommendation_rate = round(top3_count / len(natural_results), 4) if natural_results else 0.0
 
         # 细分推荐强度
         strong_count = sum(
-            1 for r in valid_results
+            1 for r in natural_results
             if r.ucloud_recommendation_strength == "strong"
         )
         moderate_count = sum(
-            1 for r in valid_results
+            1 for r in natural_results
             if r.ucloud_recommendation_strength == "moderate"
         )
-        scores.strong_recommend_rate = round(strong_count / len(valid_results), 4)
-        scores.moderate_recommend_rate = round(moderate_count / len(valid_results), 4)
+        scores.strong_recommend_rate = round(strong_count / len(natural_results), 4) if natural_results else 0.0
+        scores.moderate_recommend_rate = round(moderate_count / len(natural_results), 4) if natural_results else 0.0
 
         # ---- 情感值 ----
-        # 仅计算UCloud被提及的响应的情感平均值
-        mentioned_results = [r for r in valid_results if r.ucloud_mentioned]
-        if mentioned_results:
-            scores.sentiment_score = round(
-                sum(r.sentiment_score for r in mentioned_results) / len(mentioned_results), 4
-            )
-        else:
-            scores.sentiment_score = 0.0
+        # 全部有效响应的情感平均值
+        scores.sentiment_score = round(
+            sum(r.sentiment_score for r in valid_results) / len(valid_results), 4
+        )
 
         # ---- 位置权重 ----
         weighted_results = [r for r in valid_results if r.ucloud_mentioned]
@@ -159,16 +170,14 @@ class MetricsCalculator:
     def _calculate_geo_score(self, scores: GEOScores) -> float:
         """计算综合GEO分数（0-100）"""
         # 各指标归一化到0-1范围
-        coverage = scores.coverage_rate  # 0-1
-        mention = min(scores.mention_rate / 3.0, 1.0)  # 归一化，3次以上为满分
+        coverage = scores.coverage_rate  # 0-1，仪表盘显示为提及率
         citation = scores.citation_rate  # 0-1
-        recommendation = scores.recommendation_rate  # 0-1
+        recommendation = scores.recommendation_rate  # 0-1，TOP3推荐率
         sentiment = scores.sentiment_score  # 0-1
 
         # 加权求和
         weighted_sum = (
             coverage * self.GEO_WEIGHTS["coverage_rate"] +
-            mention * self.GEO_WEIGHTS["mention_rate"] +
             citation * self.GEO_WEIGHTS["citation_rate"] +
             recommendation * self.GEO_WEIGHTS["recommendation_rate"] +
             sentiment * self.GEO_WEIGHTS["sentiment_score"]

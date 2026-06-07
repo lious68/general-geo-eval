@@ -66,11 +66,11 @@ class KeywordsUpdate(BaseModel):
 
 
 class WeightsUpdate(BaseModel):
-    coverage_rate: float = 0.25
-    mention_rate: float = 0.15
-    citation_rate: float = 0.15
-    recommendation_rate: float = 0.25
-    sentiment_score: float = 0.20
+    coverage_rate: float = 0.45
+    mention_rate: float = 0.0
+    citation_rate: float = 0.25
+    recommendation_rate: float = 0.20
+    sentiment_score: float = 0.10
 
 
 # ============ 通用 ============

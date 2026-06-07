@@ -39,11 +39,10 @@
         <el-form-item label="品类"><el-input v-model="newQ.category" placeholder="如 云计算" /></el-form-item>
         <el-form-item label="类型">
           <el-select v-model="newQ.question_type">
-            <el-option label="直接推荐" value="direct_recommend" />
-            <el-option label="对比" value="comparison" />
-            <el-option label="技术选型" value="technical_select" />
-            <el-option label="场景" value="scenario" />
-            <el-option label="评测" value="review" />
+            <el-option label="品牌词" value="品牌词" />
+            <el-option label="品类词" value="品类词" />
+            <el-option label="对比词" value="对比词" />
+            <el-option label="场景词" value="场景词" />
           </el-select>
         </el-form-item>
         <el-form-item label="问题"><el-input v-model="newQ.question" type="textarea" :rows="2" /></el-form-item>
@@ -65,7 +64,7 @@ const questions = ref([])
 const filterCategory = ref('')
 const filterType = ref('')
 const showAddDialog = ref(false)
-const newQ = ref({ id: '', category: '', question_type: 'direct_recommend', question: '', tags: [], difficulty: 'medium' })
+const newQ = ref({ id: '', category: '', question_type: '品类词', question: '', tags: [], difficulty: 'medium' })
 
 const categoryList = computed(() => [...new Set(questions.value.map(q => q.category))])
 const typeList = computed(() => [...new Set(questions.value.map(q => q.question_type))])

@@ -271,12 +271,26 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None):
                 "url": url_content,
             })
 
-    # 转换 channels dict 为列表并排序
+    # 转换 channels dict 为列表并排序，同时提取 sample_urls
     for mk_data in by_model.values():
-        channels_list = [
-            {"channel": ch, "count": info["count"], "question_details": info["question_details"]}
-            for ch, info in mk_data["channels"].items()
-        ]
+        channels_list = []
+        for ch, info in mk_data["channels"].items():
+            # 从 question_details 提取不重复的示例 URL（最多 6 个）
+            seen = set()
+            sample_urls = []
+            for detail in info["question_details"]:
+                url = detail.get("url", "")
+                if url and url not in seen:
+                    seen.add(url)
+                    sample_urls.append(url)
+                    if len(sample_urls) >= 6:
+                        break
+            channels_list.append({
+                "channel": ch,
+                "count": info["count"],
+                "question_details": info["question_details"],
+                "sample_urls": sample_urls,
+            })
         channels_list.sort(key=lambda x: x["count"], reverse=True)
         mk_data["channels"] = channels_list
 
@@ -348,6 +362,111 @@ async def get_question_drilldown(run_id: str, model_key: str):
         })
 
     return {"success": True, "data": {"model_name": model_name, "total_questions": len(questions), "questions": questions}}
+
+
+@router.get("/{run_id}/citation-drilldown")
+async def get_citation_drilldown(run_id: str, source_channel: str = Query(...)):
+    """引用源下钻：按来源渠道名称筛选，返回该来源下的所有问题及引用链接
+
+    source_channel 为渠道名（如"UCloud官网"、"知乎"、"阿里云"等）
+    """
+    run = await db.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "评测不存在")
+
+    all_results = await db.get_results(run_id)
+
+    # 关联 questions 表获取题目文本
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question, category, question_type FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = {
+                "text": row["question"], "category": row["category"], "type": row["question_type"]
+            }
+    finally:
+        await db_conn.close()
+
+    by_model = {}
+    for r in all_results:
+        has_error = r.get("error_message") and r["error_message"] != ""
+        if has_error:
+            continue
+
+        mk = r["model_key"]
+        qid = r["question_id"]
+        q_info = question_map.get(qid, {})
+
+        # 收集该条结果中匹配 source_channel 的所有 URL
+        matching_urls = []
+
+        # 从 all_cited_urls 中查找
+        urls_raw = r.get("all_cited_urls", "[]")
+        if isinstance(urls_raw, str):
+            try:
+                urls_list = json.loads(urls_raw)
+            except (json.JSONDecodeError, TypeError):
+                urls_list = []
+        else:
+            urls_list = urls_raw or []
+
+        for url_info in urls_list:
+            if url_info.get("citation_type") != "url":
+                continue
+            channel = url_info.get("source_channel", "其他") or "其他"
+            url_content = url_info.get("content", "")
+            if channel == "其他":
+                channel = _resolve_domain_label(url_content)
+            if channel == source_channel:
+                matching_urls.append({
+                    "content": url_content,
+                    "is_ucloud": url_info.get("is_ucloud", False),
+                })
+
+        # 从 citations 中查找
+        cits_raw = r.get("citations", "[]")
+        if isinstance(cits_raw, str):
+            try:
+                cits_list = json.loads(cits_raw)
+            except (json.JSONDecodeError, TypeError):
+                cits_list = []
+        else:
+            cits_list = cits_raw or []
+
+        for cit in cits_list:
+            if cit.get("citation_type") != "url":
+                continue
+            channel = cit.get("source_channel", "其他") or "其他"
+            url_content = cit.get("content", "")
+            if channel == "其他":
+                channel = _resolve_domain_label(url_content)
+            if channel == source_channel:
+                # 去重
+                if not any(u["content"] == url_content for u in matching_urls):
+                    matching_urls.append({
+                        "content": url_content,
+                        "is_ucloud": cit.get("is_ucloud", False),
+                    })
+
+        if not matching_urls:
+            continue
+
+        if mk not in by_model:
+            by_model[mk] = {
+                "model_name": r.get("model_name", mk),
+                "questions": [],
+            }
+
+        by_model[mk]["questions"].append({
+            "question_id": qid,
+            "question_text": q_info.get("text", qid),
+            "question_category": q_info.get("category", ""),
+            "ucloud_mentioned": bool(r.get("ucloud_mentioned")),
+            "urls": matching_urls,
+        })
+
+    return {"success": True, "data": by_model}
 
 
 @router.post("/{run_id}/backfill-citations")

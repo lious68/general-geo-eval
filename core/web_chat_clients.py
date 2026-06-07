@@ -235,7 +235,7 @@ class KimiWebChatClient(WebChatClientBase):
 
     async def _navigate_to_chat(self, page: Page):
         """导航到 Kimi 新对话页面"""
-        await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30)
+        await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30000)
         await asyncio.sleep(2)
 
     async def _type_question(self, page: Page, question: str):
@@ -339,10 +339,10 @@ class KimiWebChatClient(WebChatClientBase):
                 await asyncio.sleep(2)
             else:
                 # 回退：直接导航到首页
-                await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30)
+                await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30000)
                 await asyncio.sleep(2)
         except Exception:
-            await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30)
+            await page.goto("https://kimi.moonshot.cn", wait_until="networkidle", timeout=30000)
             await asyncio.sleep(2)
 
 

@@ -227,9 +227,9 @@ class KimiWebChatClient(WebChatClientBase):
     """
 
     # ── Kimi 页面选择器 ──
-    # 注：这些选择器需要根据 Kimi 网站实际 DOM 调整
-    INPUT_SELECTOR = "textarea, [role='textbox'], textarea[class*='chat'], textarea[class*='input']"
-    SEND_SELECTOR = "button[class*='send'], button[data-testid='send-button'], img[class*='send']"
+    # Kimi 使用 contenteditable div 而不是 textarea
+    INPUT_SELECTOR = "[contenteditable='true'].chat-input-editor, [contenteditable='true']"
+    SEND_SELECTOR = "button[class*='send'], img[class*='send'], button[data-testid='send-button']"
     RESPONSE_SELECTOR = "[class*='markdown'], [class*='message-content'], [class*='assistant']"
     NEW_CHAT_SELECTOR = "a[href='/'], button[class*='new-chat'], [class*='create-conversation'], [data-testid='new-chat']"
     SEARCH_INDICATOR = "[class*='searching'], [class*='search-indicator'], [class*='web-search']"
@@ -240,13 +240,13 @@ class KimiWebChatClient(WebChatClientBase):
         await asyncio.sleep(2)
 
     async def _type_question(self, page: Page, question: str):
-        """在输入框中输入问题"""
+        """在输入框中输入问题（Kimi 用 contenteditable div，不是 textarea）"""
         input_box = page.locator(self.INPUT_SELECTOR).first
         await input_box.wait_for(state="visible", timeout=10000)
         await input_box.click()
-        # 模拟人类输入速度
         await asyncio.sleep(0.3)
-        await input_box.fill(question)
+        # contenteditable div 用 fill 不一定可靠，用 type 更接近真实输入
+        await page.keyboard.type(question, delay=30)
 
     async def _send_question(self, page: Page):
         """发送问题"""

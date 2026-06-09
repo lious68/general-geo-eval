@@ -275,9 +275,13 @@ async def update_run_status(run_id: str, status: str, completed: int = None):
                 (status, datetime.now().isoformat(), run_id)
             )
         elif status == "completed":
+            # 确保 started_at 已设置（导入场景可能为 NULL）
             await db.execute(
-                "UPDATE evaluation_runs SET status=?, completed_at=?, completed_questions=COALESCE(?,completed_questions) WHERE id=?",
-                (status, datetime.now().isoformat(), completed, run_id)
+                """UPDATE evaluation_runs
+                   SET status=?, completed_at=?, completed_questions=COALESCE(?,completed_questions),
+                       started_at=COALESCE(started_at, ?)
+                   WHERE id=?""",
+                (status, datetime.now().isoformat(), completed, datetime.now().isoformat(), run_id)
             )
         elif status == "failed":
             await db.execute(
@@ -304,7 +308,7 @@ async def get_runs(limit: int = 50, offset: int = 0) -> List[Dict]:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM evaluation_runs ORDER BY started_at DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM evaluation_runs ORDER BY COALESCE(started_at, completed_at) DESC LIMIT ? OFFSET ?",
             (limit, offset)
         )
         rows = await cursor.fetchall()

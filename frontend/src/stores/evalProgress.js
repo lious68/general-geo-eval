@@ -120,8 +120,8 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
 
   // ── 启动评测（核心 action） ──
   async function startEval(params) {
-    // params: { name, model_keys, categories, delay, mode }
-    const { name, model_keys, categories, delay, mode } = params
+    // params: { name, model_keys, categories, delay, mode, enable_search }
+    const { name, model_keys, categories, delay, mode, enable_search = false } = params
 
     running.value = true
     runId.value = ''
@@ -141,6 +141,7 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
           categories: categories.length ? categories : null,
           delay,
           mode,
+          enable_search,
         }),
       })
       runId.value = res.data.run_id

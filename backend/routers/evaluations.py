@@ -1,11 +1,14 @@
 """评测管理路由"""
-import json
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form
 from typing import Optional
+import json
+import uuid
+from datetime import datetime
 import database as db
 import models
-from services.eval_runner import start_evaluation, cancel_evaluation
+from services.eval_runner import start_evaluation, _active_tasks, _dict_to_analysis, _scores_to_dict
 from database import verify_session
+from metrics import MetricsCalculator
 
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
 
@@ -46,6 +49,7 @@ async def create_evaluation(req: models.EvaluationCreate):
             delay=req.delay,
             ws_manager=ws_manager,
             mode=req.mode,
+            enable_search=req.enable_search,
         )
         return {"success": True, "data": {"run_id": run_id}}
     except ValueError as e:
@@ -89,164 +93,16 @@ async def delete_evaluation(run_id: str):
 
 
 @router.post("/{run_id}/cancel")
-async def cancel_evaluation_endpoint(run_id: str):
-    """强制取消运行中的评测任务"""
-    ok = await cancel_evaluation(run_id)
-    if not ok:
-        raise HTTPException(404, f"评测任务 {run_id} 不存在或已结束")
-    return {"success": True}
-
-
-@router.post("/import/results")
-async def import_results(req: models.ResultsBatchImport):
-    """批量导入本地 WebChat 评测结果
-
-    本地跑完 WebChat 后，将分析结果通过此接口写入服务器数据库。
-    自动创建 evaluation_run 记录、保存分析结果、计算 GEO 评分。
-    """
-    from analyzer import ResponseAnalyzer, AnalysisResult
-    from metrics import MetricsCalculator
-    from datetime import datetime
-    import uuid
-
-    model_key = req.model_key
-    results = req.results
-
-    if not results:
-        raise HTTPException(400, "没有可导入的结果")
-
-    # 1. 创建 evaluation_run
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
-    question_ids = [r.question_id for r in results]
-    await db.create_run(
-        run_id, req.name, [model_key], question_ids,
-        {"mode": req.mode, "source": "local_webchat"}, mode=req.mode
-    )
-    await db.update_run_status(run_id, "running")
-
-    # 2. 保存分析结果
-    completed = 0
-    for r in results:
-        result_dict = {
-            "question_id": r.question_id,
-            "model_key": r.model_key,
-            "model_name": r.model_name,
-            "ucloud_mentioned": r.ucloud_mentioned,
-            "ucloud_mention_count": r.ucloud_mention_count,
-            "ucloud_rank": r.ucloud_rank,
-            "has_citation": r.has_citation,
-            "citation_count": r.citation_count,
-            "ucloud_recommended": r.ucloud_recommended,
-            "recommendation_strength": r.recommendation_strength,
-            "sentiment_score": r.sentiment_score,
-            "sentiment_label": r.sentiment_label,
-            "position_weight": r.position_weight,
-            "response_length": r.response_length,
-            "raw_content": r.raw_content,
-            "competitor_mentions": r.competitor_mentions,
-            "error_message": r.error_message,
-            "citations": r.citations,
-            "all_cited_urls": r.all_cited_urls,
-        }
-        await db.save_analysis_result(run_id, result_dict)
-        completed += 1
-
-    # 3. 计算 GEO 评分
-    calculator = MetricsCalculator()
-    all_results = [r.dict() for r in results]
-
-    # 全局评分
-    analysis_objs = []
-    for r in all_results:
-        analysis_objs.append(AnalysisResult(
-            question_id=r["question_id"],
-            model_key=r["model_key"],
-            model_name=r["model_name"],
-            ucloud_mentioned=bool(r["ucloud_mentioned"]),
-            ucloud_mention_count=r["ucloud_mention_count"],
-            ucloud_rank=r.get("ucloud_rank"),
-            has_citation=bool(r["has_citation"]),
-            citation_count=r["citation_count"],
-            ucloud_recommended=bool(r["ucloud_recommended"]),
-            ucloud_recommendation_strength=r["recommendation_strength"],
-            sentiment_score=r["sentiment_score"],
-            sentiment_label=r["sentiment_label"],
-            position_weight=r["position_weight"],
-            response_length=r["response_length"],
-            raw_content=r.get("raw_content", ""),
-        ))
-    scores = calculator.calculate_scores(analysis_objs)
-    scores_dict = {
-        "geo_score": scores.geo_score,
-        "coverage_rate": scores.coverage_rate,
-        "mention_rate": scores.mention_rate,
-        "citation_rate": scores.citation_rate,
-        "recommendation_rate": scores.recommendation_rate,
-        "sentiment_score": scores.sentiment_score,
-        "avg_rank": scores.avg_rank,
-        "total_questions": scores.total_questions,
-        "valid_responses": scores.valid_responses,
-    }
-    model_name = results[0].model_name if results else model_key
-    await db.save_geo_scores(run_id, model_key, model_name, None, scores_dict)
-
-    # 品类评分
-    questions_map = {}
-    for q in await _get_all_questions():
-        questions_map[q["id"]] = q.get("category", "")
-
-    categories = {}
-    for r in all_results:
-        cat = questions_map.get(r["question_id"], "未分类")
-        categories.setdefault(cat, []).append(r)
-
-    for cat, cat_results in categories.items():
-        cat_analysis = []
-        for r in cat_results:
-            cat_analysis.append(AnalysisResult(
-                question_id=r["question_id"], model_key=r["model_key"],
-                model_name=r["model_name"],
-                ucloud_mentioned=bool(r["ucloud_mentioned"]),
-                ucloud_mention_count=r["ucloud_mention_count"],
-                ucloud_rank=r.get("ucloud_rank"),
-                has_citation=bool(r["has_citation"]),
-                citation_count=r["citation_count"],
-                ucloud_recommended=bool(r["ucloud_recommended"]),
-                ucloud_recommendation_strength=r["recommendation_strength"],
-                sentiment_score=r["sentiment_score"],
-                sentiment_label=r["sentiment_label"],
-                position_weight=r["position_weight"],
-                response_length=r["response_length"],
-                raw_content=r.get("raw_content", ""),
-            ))
-        cat_scores = calculator.calculate_scores(cat_analysis)
-        cat_dict = {
-            "geo_score": cat_scores.geo_score,
-            "coverage_rate": cat_scores.coverage_rate,
-            "mention_rate": cat_scores.mention_rate,
-            "citation_rate": cat_scores.citation_rate,
-            "recommendation_rate": cat_scores.recommendation_rate,
-            "sentiment_score": cat_scores.sentiment_score,
-            "avg_rank": cat_scores.avg_rank,
-            "total_questions": cat_scores.total_questions,
-            "valid_responses": cat_scores.valid_responses,
-        }
-        await db.save_geo_scores(run_id, model_key, model_name, cat, cat_dict)
-
-    # 4. 更新状态为完成
-    await db.update_run_status(run_id, "completed", completed)
-
-    return {"success": True, "data": {"run_id": run_id, "completed": completed}}
-
-
-async def _get_all_questions():
-    """获取所有活跃问题"""
-    db_conn = await db.get_db()
-    try:
-        cursor = await db_conn.execute("SELECT * FROM questions WHERE is_active=1")
-        return [dict(r) for r in await cursor.fetchall()]
-    finally:
-        await db_conn.close()
+async def cancel_evaluation(run_id: str):
+    """取消正在运行的评测"""
+    # 取消后台 asyncio task
+    task = _active_tasks.get(run_id)
+    if task and not task.done():
+        task.cancel()
+        _active_tasks.pop(run_id, None)
+    # 更新状态为 cancelled
+    await db.update_run_status(run_id, "cancelled")
+    return {"success": True, "message": "评测已取消"}
 
 
 @router.websocket("/ws/{run_id}")
@@ -268,3 +124,139 @@ async def evaluation_ws(ws: WebSocket, run_id: str, token: str = None):
             await ws.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(run_id, ws)
+
+
+@router.post("/import-results")
+async def import_local_results(
+    file: UploadFile = File(..., description="本地 Playwright runner 导出的 JSON 文件"),
+    run_name: str = Form("本地WebChat导入"),
+):
+    """导入本地 Playwright WebChat 评测结果
+
+    接收 local_webchat_runner.py 导出的 JSON 文件，
+    创建 evaluation_run 记录，写入 analysis_results 和 geo_scores。
+    """
+    try:
+        content = await file.read()
+        data = json.loads(content)
+    except Exception as e:
+        raise HTTPException(400, f"JSON 解析失败: {e}")
+
+    # 验证数据格式
+    if "analysis_results" not in data or "questions" not in data:
+        raise HTTPException(400, "JSON 格式不正确: 缺少 analysis_results 或 questions 字段")
+
+    analysis_results = data.get("analysis_results", {})
+    questions = data.get("questions", [])
+    geo_scores_data = data.get("geo_scores", {})
+    model_keys = list(analysis_results.keys())
+
+    if not model_keys:
+        raise HTTPException(400, "没有可用的模型数据")
+
+    # 生成 run_id
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_local_" + uuid.uuid4().hex[:6]
+
+    # 收集所有问题ID
+    question_ids = [q["id"] for q in questions]
+
+    # 创建评测运行记录
+    total = sum(len(v) for v in analysis_results.values())
+    try:
+        await db.create_run(run_id, run_name, model_keys, question_ids, {
+            "mode": "webchat_local",
+            "source": "local_playwright",
+            "total_results": total,
+        }, mode="webchat")
+    except Exception as e:
+        raise HTTPException(500, f"创建评测记录失败: {e}")
+
+    # 写入 analysis_results
+    inserted = 0
+    try:
+        for mk, results in analysis_results.items():
+            for r in results:
+                await db.save_analysis_result(run_id, r)
+                inserted += 1
+    except Exception as e:
+        await db.delete_run(run_id)
+        raise HTTPException(500, f"写入分析结果失败: {e}")
+
+    # 写入 geo_scores
+    if geo_scores_data:
+        try:
+            for mk, scores_by_cat in geo_scores_data.items():
+                model_name = analysis_results[mk][0].get("model_name", mk) if analysis_results.get(mk) else mk
+                for cat, scores in scores_by_cat.items():
+                    # cat 为 None 表示全局评分
+                    await db.save_geo_scores(run_id, mk, model_name, cat, scores)
+        except Exception as e:
+            # geo_scores 写入失败不阻塞，可以后续重新计算
+            import logging
+            logging.getLogger(__name__).warning(f"写入 geo_scores 失败 (可手动重新计算): {e}")
+
+    # 标记为已完成
+    await db.update_run_status(run_id, "completed", total)
+
+    return {
+        "success": True,
+        "data": {
+            "run_id": run_id,
+            "models": model_keys,
+            "questions": len(question_ids),
+            "results_inserted": inserted,
+        },
+        "message": f"成功导入 {inserted} 条结果，{len(model_keys)} 个模型，{len(question_ids)} 个问题",
+    }
+
+
+@router.post("/export-webchat-config")
+async def export_webchat_config(req: models.EvaluationCreate):
+    """导出 WebChat 本地评测任务配置
+
+    前端选择 WebChat 模型后调用此接口，返回一个 task_config.json，
+    用户将此文件下载到本地电脑，运行 local_webchat_runner.py 即可自动按配置执行。
+
+    配置包含：模型列表、品类筛选、问题范围、延迟等参数。
+    """
+    # 验证必须是 webchat 模式
+    if req.mode != "webchat":
+        raise HTTPException(400, "mode 必须是 'webchat'")
+
+    # 获取问题列表
+    try:
+        questions = await db.get_questions(
+            category=req.categories[0] if req.categories and len(req.categories) == 1 else None,
+            active_only=True,
+        )
+        if req.categories:
+            questions = [q for q in questions if q["category"] in req.categories]
+    except Exception:
+        questions = []
+
+    # 如果指定了 question_ids，进一步筛选
+    if req.question_ids:
+        questions = [q for q in questions if q["id"] in req.question_ids]
+
+    if not questions:
+        raise HTTPException(400, "没有可评估的问题")
+
+    # 生成任务配置
+    config = {
+        "version": 1,
+        "generated_at": datetime.utcnow().isoformat(),
+        "task": {
+            "name": req.name,
+            "model_keys": req.model_keys,
+            "delay": req.delay,
+        },
+        "questions": questions,
+        "question_ids": [q["id"] for q in questions],
+        "categories": req.categories or [],
+    }
+
+    return {
+        "success": True,
+        "data": config,
+        "message": f"已生成 {len(questions)} 个问题、{len(req.model_keys)} 个模型的 WebChat 任务配置",
+    }

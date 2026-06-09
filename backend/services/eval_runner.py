@@ -84,6 +84,7 @@ async def start_evaluation(
     delay: float = 1.0,
     ws_manager=None,
     mode: str = "api",
+    enable_search: bool = False,
 ) -> str:
     """启动异步评测任务"""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
@@ -136,13 +137,13 @@ async def start_evaluation(
     actual_q_ids = [q["id"] for q in q_list]
     await create_run(run_id, name, available_models if mode == "api" else model_keys,
                      actual_q_ids, {
-        "temperature": temperature, "delay": delay, "mode": mode
+        "temperature": temperature, "delay": delay, "mode": mode, "enable_search": enable_search
     }, mode=mode)
 
     # 启动后台任务
     task = asyncio.create_task(
         _run_evaluation(run_id, available_models if mode == "api" else model_keys,
-                        q_list, temperature, delay, ws_manager, mode)
+                        q_list, temperature, delay, ws_manager, mode, enable_search)
     )
     task.add_done_callback(_on_task_done)
     _active_tasks[run_id] = task
@@ -158,6 +159,7 @@ async def _run_evaluation(
     delay: float,
     ws_manager=None,
     mode: str = "api",
+    enable_search: bool = False,
 ):
     """执行评测的核心逻辑"""
     logger.info(f"[EVAL {run_id}] Starting evaluation: mode={mode}, models={model_keys}, questions={len(questions)}")
@@ -263,8 +265,8 @@ async def _run_evaluation(
                         # 让出控制权，使 CancelledError 能被及时响应
                         await asyncio.sleep(0)
 
-                        # 发送请求
-                        response = client.chat(q["question"])
+                        # 发送请求（传递 enable_search 参数）
+                        response = client.chat(q["question"], enable_search=enable_search)
 
                         # 分析响应
                         analysis = analyzer.analyze(

@@ -15,6 +15,7 @@ class EvaluationCreate(BaseModel):
     temperature: float = 0.7
     delay: float = 1.0
     mode: str = "api"  # "api" 或 "webchat"
+    enable_search: bool = False  # 是否启用联网搜索
 
 
 class EvaluationResponse(BaseModel):
@@ -103,6 +104,13 @@ class WeightsUpdate(BaseModel):
     citation_rate: float = 0.25
     recommendation_rate: float = 0.20
     sentiment_score: float = 0.10
+
+
+# ============ 本地结果导入 ============
+
+class LocalResultsImport(BaseModel):
+    run_name: str = "本地WebChat导入"
+    model_keys: List[str] = []
 
 
 # ============ 通用 ============

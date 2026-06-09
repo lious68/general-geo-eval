@@ -54,7 +54,7 @@ ucloud-geo-eval/
 │   ├── analyzer.py              # 响应分析器（提及/引用/推荐/情感/全URL检测）
 │   ├── metrics.py               # GEO指标计算引擎
 │   ├── report.py                # 报告生成器（HTML/Excel）
-│   ├── web_chat_clients.py      # WebChat浏览器自动化客户端（5模型）
+│   ├── web_chat_clients.py      # WebChat浏览器自动化客户端（5模型Playwright）
 │   ├── web_chat_auth.py         # WebChat认证状态管理
 │   └── main.py                  # CLI 主执行脚本
 │
@@ -64,7 +64,7 @@ ucloud-geo-eval/
 │   ├── models.py                # Pydantic 数据模型
 │   ├── routers/
 │   │   ├── auth.py              # 登录鉴权
-│   │   ├── evaluations.py       # 评测管理 + WebSocket 进度
+│   │   ├── evaluations.py       # 评测管理 + WebSocket 进度 + 任务配置导出
 │   │   ├── results.py           # 结果查询 / 引用详情 / 引用源统计 / 下钻
 │   │   ├── questions.py         # 问题管理
 │   │   ├── settings.py          # 系统设置
@@ -77,23 +77,31 @@ ucloud-geo-eval/
 │   └── src/
 │       ├── views/
 │       │   ├── Dashboard.vue       # 📊 GEO 仪表盘
-│       │   ├── Evaluation.vue      # 🚀 执行评测
+│       │   ├── Evaluation.vue      # 🚀 执行评测（支持API/导入本地结果）
 │       │   ├── History.vue         # 📜 历史评测情况
 │       │   ├── CitationSources.vue # 🔗 引用源情况
 │       │   ├── Questions.vue       # 📝 问题管理
 │       │   ├── Settings.vue        # ⚙️ 系统设置
-│       │   └─ Login.vue           # 🔐 登录
+│       │   └── Login.vue           # 🔐 登录
 │       ├── stores/
 │       │   └── evalProgress.js     # 评测进度全局状态（跨页面可见）
 │       └── composables/
 │           └── useWebSocket.js     # API 请求 + WebSocket
 │
-├── scripts/
-│   └── setup_webchat_auth.py      # WebChat 登录态设置脚本
+├── scripts/                     # 工具脚本
+│   ├── setup_webchat_auth.py    # WebChat 登录态设置脚本（本地运行）
+│   ├── local_webchat_runner.py  # 本地 Playwright WebChat 评测 runner
+│   ├── webchat_run.py           # WebChat 交互式一键启动（Win/Mac通用）
+│   ├── run_webchat.bat          # Windows 快捷启动脚本
+│   ├── webchat_interactive_helper.py  # VNC 远程反爬验证辅助
+│   └── inspect_chat_dom.py      # 聊天页面 DOM 检查工具
+│
+├── docs/
+│   └── webchat_local_guide.md   # WebChat 本地评测详细使用指南
 │
 ├── data/
-│   └── webchat_auth/              # WebChat 认证状态文件目录
-│       └── {model}_state.json     # 各模型 Playwright storageState
+│   └── webchat_auth/            # WebChat 认证状态文件目录
+│       └── {model}_state.json   # 各模型 Playwright storageState
 │
 ├── nginx.conf                   # Nginx 配置
 ├── deploy.sh                    # 一键部署脚本
@@ -103,22 +111,47 @@ ucloud-geo-eval/
 
 ## 🚀 快速开始
 
-### 方式一：Web 系统（推荐）
+### 环境准备
 
+**Python 3.9+** 是必需的。
+
+**本地电脑（Win10/Mac/Linux）：**
+```bash
+# 克隆项目
+git clone https://github.com/lious68/ucloud-geo-eval.git
+cd ucloud-geo-eval
+
+# 安装 Python 依赖（Playwright 浏览器自动化）
+pip install -r backend/requirements.txt
+pip install playwright
+playwright install chromium
+
+# 设置 WebChat 登录状态（首次运行只需一次）
+python scripts/setup_webchat_auth.py kimi
+# ... 其他模型同理
+```
+
+**服务器（Linux，一键部署）：**
 ```bash
 # 1. 克隆项目
 git clone https://github.com/lious68/ucloud-geo-eval.git
 cd ucloud-geo-eval
 
-# 2. 一键部署（服务器上执行）
+# 2. 一键部署
 bash deploy.sh
 ```
 
 部署完成后访问 `http://<服务器IP>/`，首次使用设置管理密码，然后在「系统设置」页面配置 API Key。
 
-### WebChat 联网搜索评测
+### WebChat 联网搜索评测（云 + 本地联动模式）
 
 除了 API 模式评测（调用模型 API），系统还支持 **WebChat 模式**——通过 Playwright 浏览器自动化，模拟真实用户在各 AI 模型官网的聊天交互，获取带联网搜索引用的完整响应。
+
+**为什么需要云+本地联动？**
+- **API 模式**（服务器上直接跑）：适用于有 API Key 且支持联网搜索的模型
+- **WebChat 模式**（本地电脑跑）：适用于 API 无法调通或需要浏览器交互处理验证码的模型
+
+> **核心思路**：服务器前端选择评测配置 → 下载任务配置 JSON → 本地电脑运行 Playwright 浏览器自动化 → 生成的结果文件上传回服务器 → Dashboard 查看
 
 **支持的 WebChat 模型：**
 
@@ -130,55 +163,121 @@ bash deploy.sh
 | Kimi | www.kimi.com | ✅ 有 |
 | 千问 | www.qianwen.com | ✅ 有 |
 
-#### 第一步：本地安装 Playwright
+#### 整体工作流
+
+```
+┌────────────────────── 服务器 (Linux) ──────────────────────┐
+│                                                              │
+│  Evaluation.vue 前端                                         │
+│  ├─ API 模式 → 直接调用模型 API + 联网搜索                    │
+│  └─ WebChat 模式 → 下载任务配置 ↓                            │
+│                                                              │
+│                                     ┌─ 导入结果 ← 本地 .json  │
+│                                     └─ Dashboard 展示结果      │
+└──────────────────────────────────────────────────────────────┘
+                               │
+                     下载 task_config.json
+                               │
+                               ▼
+┌───────────────────── 本地电脑 (Win10 / Mac) ───────────────┐
+│                                                              │
+│  python scripts/local_webchat_runner.py                      │
+│    --config task_config.json --headed                        │
+│                                                              │
+│  → 弹出浏览器窗口（人可手动处理验证码/登录）                   │
+│  → 自动提问 → 等待回复 → 分析 → 评分                         │
+│  → 输出: output/webchat_评测_20260608_143022.json           │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+                               │
+                     上传 .json 到服务器前端
+                               │
+                               ▼
+                     服务器导入 → Dashboard 展示
+```
+
+#### 第一步：在服务器上下载任务配置
+
+1. 登录服务器前端 → 「执行评测」页面
+2. 选择 **「🌐 WebChat 模式」**
+3. 勾选要评测的模型（需显示 **「✓ 已登录」**）
+4. 选择品类筛选（可选）
+5. 调整请求间隔（建议 8 秒以上）
+6. 点击 **「下载任务配置（在本地电脑运行）」** → 浏览器下载 `webchat_task_XXX.json`
+
+#### 第二步：在本地电脑上运行评测
+
+将 `webchat_task_XXX.json` 传到本地电脑后，有三种运行方式：
+
+**方式 A：从任务配置运行（推荐，云联动）**
 
 ```bash
+# 显示浏览器窗口（可手动处理验证码/登录）
+python scripts/local_webchat_runner.py --config webchat_task_XXX.json --headed
+
+# 后台运行（不显示窗口）
+python scripts/local_webchat_runner.py --config webchat_task_XXX.json
+```
+
+**方式 B：交互式引导（新手友好）**
+
+```bash
+# 进入交互式配置引导
+python scripts/webchat_run.py
+```
+
+**方式 C：手动指定参数**
+
+```bash
+python scripts/local_webchat_runner.py --models kimi ernie --headed --delay 10
+python scripts/local_webchat_runner.py --models kimi --categories 云数据库
+```
+
+**Windows 快捷启动：**
+```powershell
+scripts\run_webchat.bat                # 交互式引导
+scripts\run_webchat.bat kimi headed    # 指定模型 + 显示浏览器
+scripts\run_webchat.bat config task.json  # 从配置文件运行
+```
+
+**Mac/Linux 快捷启动：**
+```bash
+python scripts/webchat_run.py                    # 交互式
+python scripts/webchat_run.py --config task.json  # 从配置
+python scripts/webchat_run.py --models kimi ernie  # 手动指定
+```
+
+#### 第三步：处理验证码/登录
+
+使用 `--headed` 参数时，浏览器会弹出窗口。运行过程中：
+- 如果需要登录 → 在浏览器窗口中手动登录
+- 如果出现验证码 → 在浏览器窗口中手动完成验证
+- 登录状态会自动保存到 `data/webchat_auth/`，下次运行无需重复登录
+
+#### 第四步：上传结果到服务器
+
+评测完成后，会在 `output/` 目录生成结果文件（如 `output/webchat_评测_20260608_143022.json`）。
+
+1. 将此文件传到服务器
+2. 在服务器前端「执行评测」页面，找到 **「导入本地 WebChat 结果」** 区域
+3. 拖拽或点击上传 .json 文件
+4. 导入成功后，点击 **「查看结果 →」** 跳转到 Dashboard
+
+#### 本地环境准备
+
+```bash
+# 安装 Playwright
 pip install playwright
 playwright install chromium
-```
 
-#### 第二步：运行登录态设置脚本
-
-```bash
-cd ucloud-geo-eval   # 注意：必须在项目根目录运行
-
-# 设置单个模型
-python scripts/setup_webchat_auth.py deepseek
-python scripts/setup_webchat_auth.py ernie
-python scripts/setup_webchat_auth.py doubao
+# 设置各模型的登录状态（在本地电脑执行一次）
 python scripts/setup_webchat_auth.py kimi
-python scripts/setup_webchat_auth.py qwen
-
-# 或者一次性设置所有模型
-python scripts/setup_webchat_auth.py all
-```
-
-脚本会打开一个**可见的浏览器窗口**，自动导航到对应 AI 网站。你手动完成登录后，回到终端按 Enter，脚本自动保存登录状态到 `data/webchat_auth/{model}_state.json`。
-
-#### 第三步：上传登录态到服务器
-
-有三种方式：
-
-**方式 A：Web 界面上传**（最简单）
-
-打开评测系统 → 执行评测页面 → 右侧 **WebChat 认证状态** 区域 → 点击上传按钮选择 JSON 文件。
-
-**方式 B：API 上传**
-
-```bash
-curl -X POST http://<服务器IP>/api/webchat/auth/upload/deepseek \
-  -F "file=@data/webchat_auth/deepseek_state.json" \
-  -H "Authorization: Bearer <你的token>"
-```
-
-**方式 C：SCP 直接拷贝**
-
-```bash
-scp data/webchat_auth/deepseek_state.json root@<服务器IP>:/opt/ucloud-geo-eval/data/webchat_auth/
+python scripts/setup_webchat_auth.py ernie
+# ... 或其他模型
 ```
 
 #### 注意事项
-- **登录有效期**：各平台 cookie 有效期不同（通常 7-30 天），过期后需重新登录上传
+- **登录有效期**：各平台 cookie 有效期不同（通常 7-30 天），过期后需重新运行 `setup_webchat_auth.py` 登录
 - **不要退出登录**：保存 cookie 后，不要在该浏览器中退出登录，否则 cookie 会失效
 - 服务器上已预装 Playwright + Chromium，无需额外安装
 

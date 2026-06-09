@@ -10,17 +10,17 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # 原厂模型配置
 MODELS_CONFIG = {
-    "deepseek": {"name": "DeepSeek", "base_url": "https://api.deepseek.com", "model": "deepseek-chat", "api_key_env": "DEEPSEEK_API_KEY"},
-    "ernie": {"name": "文心一言", "base_url": "https://qianfan.baidubce.com/v2", "model": "ernie-4.0-8k", "api_key_env": "ERNIE_API_KEY"},
-    "doubao": {"name": "豆包", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-pro-32k", "api_key_env": "DOUBAO_API_KEY"},
-    "kimi": {"name": "Kimi", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k", "api_key_env": "KIMI_API_KEY"},
-    "qwen": {"name": "通义千问", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "api_key_env": "QWEN_API_KEY"},
+    "deepseek": {"name": "DeepSeek", "base_url": "https://api.deepseek.com", "model": "deepseek-chat", "api_key_env": "DEEPSEEK_API_KEY", "has_search": False, "search_note": "官方API无内置联网"},
+    "ernie": {"name": "文心一言", "base_url": "https://qianfan.baidubce.com/v2", "model": "ernie-4.0-8k", "api_key_env": "ERNIE_API_KEY", "has_search": True, "search_note": "通过Qianfan AppBuilder"},
+    "doubao": {"name": "豆包", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-pro-32k", "api_key_env": "DOUBAO_API_KEY", "has_search": True, "search_note": "extra_body.enable_search"},
+    "kimi": {"name": "Kimi", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k", "api_key_env": "KIMI_API_KEY", "has_search": True, "search_note": "builtin_function:$web_search"},
+    "qwen": {"name": "通义千问", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus", "api_key_env": "QWEN_API_KEY", "has_search": True, "search_note": "enable_search+forced_search"},
 }
 
 # ModelVerse 中转平台配置
 MODELVERSE_CONFIG = {
     "base_url": "https://api.modelverse.cn/v1",
-    "api_key": "jzSvXwLaaE9g03Pc0fC043Fe-0Fb7-4665-bC2A-10EdA49d",
+    "api_key": os.getenv("MODELVERSE_API_KEY", "jzSvXwLaaE9g03Pc0fC043Fe-0Fb7-4665-bC2A-10EdA49d"),
     "models": {
         "deepseek": "deepseek-chat",
         "ernie": "ernie-4.0-8k",
@@ -47,6 +47,8 @@ async def get_models():
             "model": custom_model,
             "has_api_key": bool(api_key),
             "api_key_preview": f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "",
+            "has_search": cfg.get("has_search", False),
+            "search_note": cfg.get("search_note", ""),
         })
     return {
         "success": True,
@@ -54,7 +56,7 @@ async def get_models():
             "models": result,
             "use_modelverse": use_modelverse == "true",
             "modelverse_base_url": MODELVERSE_CONFIG["base_url"],
-            "modelverse_api_key_preview": f"{MODELVERSE_CONFIG['api_key'][:8]}...{MODELVERSE_CONFIG['api_key'][-6:]}",
+            "modelverse_api_key_preview": "*** (via MODELVERSE_API_KEY)" if os.getenv("MODELVERSE_API_KEY") else f"{MODELVERSE_CONFIG['api_key'][:8]}...{MODELVERSE_CONFIG['api_key'][-6:]}",
         }
     }
 
@@ -97,8 +99,8 @@ async def disable_modelverse():
 
 
 @router.post("/models/{model_key}/test")
-async def test_model(model_key: str):
-    """测试模型连通性"""
+async def test_model(model_key: str, enable_search: bool = False):
+    """测试模型连通性（可选测试联网搜索）"""
     if model_key not in MODELS_CONFIG:
         raise HTTPException(400, f"未知模型: {model_key}")
 
@@ -111,12 +113,12 @@ async def test_model(model_key: str):
         os.environ[MODELS_CONFIG[model_key]["api_key_env"]] = api_key
         from model_clients import ModelClient
         client = ModelClient(model_key)
-        response = client.chat("请用一句话介绍UCloud优刻得", None)
+        response = client.chat("请用一句话介绍UCloud优刻得", None, enable_search=enable_search)
         if response.get("error"):
             return {"success": False, "message": response["error"]}
         content = response.get("content", "")
         mentioned = any(kw in content for kw in ["UCloud", "ucloud", "优刻得"])
-        return {"success": True, "data": {"response": content[:200], "ucloud_mentioned": mentioned}}
+        return {"success": True, "data": {"response": content[:500], "ucloud_mentioned": mentioned, "search_enabled": enable_search}}
     except Exception as e:
         return {"success": False, "message": str(e)}
 

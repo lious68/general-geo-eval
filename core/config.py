@@ -86,6 +86,11 @@ MODELS = {
         "max_tokens": 2048,
         "temperature": 0.7,
         "pricing": {"input": 1, "output": 2},  # 元/百万tokens
+        # DeepSeek V4 Pro 支持 function calling，可通过 tools 实现联网搜索
+        "enable_search": {
+            "method": "deepseek_tools",
+            "note": "通过 function calling 实现联网搜索",
+        },
     },
     "ernie": {
         "name": "文心一言",
@@ -96,6 +101,14 @@ MODELS = {
         "temperature": 0.7,
         "pricing": {"input": 120, "output": 120},
         "note": "也可使用百度原生API: aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop",
+        # 文心联网搜索需通过 AppBuilder 应用配置
+        # app_id 可在百度千帆控制台创建
+        "enable_search": {
+            "method": "ernie_direct",
+            "app_id": "",  # 在数据库设置中配置 qianfan_app_id
+            "secret_key_env": "ERNIE_SECRET_KEY",  # 可选，OAuth access_token 需要
+            "note": "需要在千帆控制台创建启用了联网搜索的应用，或配置 ERNIE_SECRET_KEY",
+        },
     },
     "doubao": {
         "name": "豆包",
@@ -106,6 +119,11 @@ MODELS = {
         "temperature": 0.7,
         "pricing": {"input": 0.8, "output": 2},
         "note": "model 参数需替换为火山引擎 Ark 控制台创建的推理接入点 ID (ep-xxxxxxxx)",
+        # 火山方舟 OpenAI 兼容 API 支持 enable_search
+        "enable_search": {
+            "method": "doubao_extra_body",
+            "note": "通过 extra_body.enable_search=True 启用",
+        },
     },
     "kimi": {
         "name": "Kimi",
@@ -115,6 +133,11 @@ MODELS = {
         "max_tokens": 2048,
         "temperature": 0.7,
         "pricing": {"input": 12, "output": 12},
+        # Kimi 使用 builtin_function tool calling 实现联网搜索
+        "enable_search": {
+            "method": "kimi_tools",
+            "note": "通过 tools=[builtin_function:$web_search] 启用",
+        },
     },
     "qwen": {
         "name": "通义千问",
@@ -124,6 +147,11 @@ MODELS = {
         "max_tokens": 2048,
         "temperature": 0.7,
         "pricing": {"input": 4, "output": 12},
+        # DashScope 支持 enable_search + forced_search
+        "enable_search": {
+            "method": "qwen_extra_body",
+            "note": "通过 extra_body.enable_search + search_options.forced_search 启用",
+        },
     },
 }
 

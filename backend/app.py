@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from database import init_db, verify_session
-from routers import evaluations, results, questions, settings, auth, webchat
+from routers import evaluations, results, questions, settings, auth, webchat, agent
 
 
 # 需要鉴权的路径前缀
@@ -36,6 +36,7 @@ PUBLIC_PATHS = [
     "/api/webchat/auth/status",
     "/api/evaluations/ws/",     # WebSocket 连接：token 通过 query param 或初始消息验证
     "/api/evaluations/import/", # 本地 WebChat 结果导入
+    "/api/agent/",             # 本地 Agent WebSocket
     "/docs",
     "/openapi.json",
     "/redoc",
@@ -112,6 +113,10 @@ app.include_router(results.router)
 app.include_router(questions.router)
 app.include_router(settings.router)
 app.include_router(webchat.router)
+app.include_router(agent.router)
+
+# 注入 evaluations 的 ws_manager 给 agent 路由，用于广播进度
+agent.set_ws_manager(evaluations.ws_manager)
 
 # 静态文件（Vue 构建产物）— 必须最后挂载
 frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

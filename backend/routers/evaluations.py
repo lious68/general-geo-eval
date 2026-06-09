@@ -104,8 +104,6 @@ async def import_results(req: models.ResultsBatchImport):
     本地跑完 WebChat 后，将分析结果通过此接口写入服务器数据库。
     自动创建 evaluation_run 记录、保存分析结果、计算 GEO 评分。
     """
-    from analyzer import ResponseAnalyzer, AnalysisResult
-    from metrics import MetricsCalculator
     from datetime import datetime
     import uuid
 
@@ -151,87 +149,12 @@ async def import_results(req: models.ResultsBatchImport):
         await db.save_analysis_result(run_id, result_dict)
         completed += 1
 
-    # 3. 计算 GEO 评分
-    calculator = MetricsCalculator()
-    all_results = [r.dict() for r in results]
-
-    # 全局评分
-    analysis_objs = []
-    for r in all_results:
-        analysis_objs.append(AnalysisResult(
-            question_id=r["question_id"],
-            model_key=r["model_key"],
-            model_name=r["model_name"],
-            ucloud_mentioned=bool(r["ucloud_mentioned"]),
-            ucloud_mention_count=r["ucloud_mention_count"],
-            ucloud_rank=r.get("ucloud_rank"),
-            has_citation=bool(r["has_citation"]),
-            citation_count=r["citation_count"],
-            ucloud_recommended=bool(r["ucloud_recommended"]),
-            ucloud_recommendation_strength=r["recommendation_strength"],
-            sentiment_score=r["sentiment_score"],
-            sentiment_label=r["sentiment_label"],
-            position_weight=r["position_weight"],
-            response_length=r["response_length"],
-            raw_content=r.get("raw_content", ""),
-        ))
-    scores = calculator.calculate_scores(analysis_objs)
-    scores_dict = {
-        "geo_score": scores.geo_score,
-        "coverage_rate": scores.coverage_rate,
-        "mention_rate": scores.mention_rate,
-        "citation_rate": scores.citation_rate,
-        "recommendation_rate": scores.recommendation_rate,
-        "sentiment_score": scores.sentiment_score,
-        "avg_rank": scores.avg_rank,
-        "total_questions": scores.total_questions,
-        "valid_responses": scores.valid_responses,
-    }
+    # 3. 计算 GEO 评分（使用共享函数）
+    from services.eval_runner import calculate_and_save_geo_scores
     model_name = results[0].model_name if results else model_key
-    await db.save_geo_scores(run_id, model_key, model_name, None, scores_dict)
-
-    # 品类评分
-    questions_map = {}
-    for q in await _get_all_questions():
-        questions_map[q["id"]] = q.get("category", "")
-
-    categories = {}
-    for r in all_results:
-        cat = questions_map.get(r["question_id"], "未分类")
-        categories.setdefault(cat, []).append(r)
-
-    for cat, cat_results in categories.items():
-        cat_analysis = []
-        for r in cat_results:
-            cat_analysis.append(AnalysisResult(
-                question_id=r["question_id"], model_key=r["model_key"],
-                model_name=r["model_name"],
-                ucloud_mentioned=bool(r["ucloud_mentioned"]),
-                ucloud_mention_count=r["ucloud_mention_count"],
-                ucloud_rank=r.get("ucloud_rank"),
-                has_citation=bool(r["has_citation"]),
-                citation_count=r["citation_count"],
-                ucloud_recommended=bool(r["ucloud_recommended"]),
-                ucloud_recommendation_strength=r["recommendation_strength"],
-                sentiment_score=r["sentiment_score"],
-                sentiment_label=r["sentiment_label"],
-                position_weight=r["position_weight"],
-                response_length=r["response_length"],
-                raw_content=r.get("raw_content", ""),
-            ))
-        cat_scores = calculator.calculate_scores(cat_analysis)
-        cat_dict = {
-            "geo_score": cat_scores.geo_score,
-            "coverage_rate": cat_scores.coverage_rate,
-            "mention_rate": cat_scores.mention_rate,
-            "citation_rate": cat_scores.citation_rate,
-            "recommendation_rate": cat_scores.recommendation_rate,
-            "sentiment_score": cat_scores.sentiment_score,
-            "avg_rank": cat_scores.avg_rank,
-            "total_questions": cat_scores.total_questions,
-            "valid_responses": cat_scores.valid_responses,
-        }
-        await db.save_geo_scores(run_id, model_key, model_name, cat, cat_dict)
+    formatted_results = [r.dict() for r in results]
+    questions_list = await _get_all_questions()
+    await calculate_and_save_geo_scores(run_id, model_key, model_name, formatted_results, questions_list)
 
     # 4. 更新状态为完成
     await db.update_run_status(run_id, "completed", completed)

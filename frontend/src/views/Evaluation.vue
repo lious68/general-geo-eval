@@ -17,6 +17,15 @@
           <el-alert v-if="form.mode === 'webchat'" type="info" :closable="false" style="margin-top:8px">
             WebChat 模式通过浏览器自动化模拟真实用户在各 AI 官网提问，模型会联网搜索并引用真实来源。需先在「系统设置」配置各网站的登录状态。
           </el-alert>
+          <div v-if="form.mode === 'webchat'" style="margin-top:8px">
+            <el-tag v-if="evalStore.agentConnected" type="success" effect="dark">
+              ✓ 本地 Agent 已连接
+            </el-tag>
+            <el-alert v-else type="warning" :closable="false" show-icon style="display:inline-block">
+              未检测到本地 Agent，请先在本地运行:
+              <code style="background:#f5f5f5;padding:2px 6px;border-radius:3px">python scripts/local_agent.py --server 113.31.106.119 --password 你的密码</code>
+            </el-alert>
+          </div>
         </el-form-item>
 
         <el-form-item label="选择模型">
@@ -58,11 +67,14 @@
         </el-form-item>
 
         <el-form-item>
-          <el-button type="primary" @click="startEval" :disabled="!form.model_keys.length || !canStart">
+          <el-button type="primary" @click="startEval" :disabled="!form.model_keys.length || !canStart || (form.mode === 'webchat' && !evalStore.agentConnected)">
             <el-icon><VideoPlay /></el-icon> 开始评测
           </el-button>
           <span v-if="!canStart" style="margin-left:12px;color:#999">
             {{ form.mode === 'api' ? '请至少选择一个已配置 API Key 的模型' : '请至少选择一个已登录的 WebChat 模型' }}
+          </span>
+          <span v-if="form.mode === 'webchat' && canStart && !evalStore.agentConnected" style="margin-left:12px;color:#e6a23c">
+            请先启动本地 Agent
           </span>
         </el-form-item>
       </el-form>
@@ -169,9 +181,11 @@ function onModeChange(mode) {
   if (mode === 'api') {
     form.value.delay = 1.0
     form.value.model_keys = models.value.filter(m => m.has_api_key).map(m => m.key)
+    evalStore.stopAgentPoll()
   } else {
     form.value.delay = 8
     form.value.model_keys = displayModels.value.filter(m => m.webchat_status === 'ready').map(m => m.key)
+    evalStore.startAgentPoll()
   }
 }
 

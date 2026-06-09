@@ -23,10 +23,12 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
   const lastUpdateTime = ref('')
   const logs = ref([])
   const evalMode = ref('api')  // 当前评测模式（api / webchat）
+  const agentConnected = ref(false)  // 本地 Agent 是否在线
 
   // 内部引用（不需要 reactive）
   let ws = null
   let heartbeatTimer = null
+  let agentPollTimer = null
   let secondsSinceUpdate = 0
 
   // ── 计算属性 ──
@@ -245,6 +247,29 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
     }
   }
 
+  // ── Agent 连接状态轮询 ──
+  function startAgentPoll() {
+    stopAgentPoll()
+    fetchAgentStatus()
+    agentPollTimer = setInterval(fetchAgentStatus, 10000)
+  }
+
+  function stopAgentPoll() {
+    if (agentPollTimer) {
+      clearInterval(agentPollTimer)
+      agentPollTimer = null
+    }
+  }
+
+  async function fetchAgentStatus() {
+    try {
+      const res = await apiFetch('/agent/status')
+      agentConnected.value = res.data?.connected || false
+    } catch (e) {
+      agentConnected.value = false
+    }
+  }
+
   // ── 重置状态 ──
   function reset() {
     running.value = false
@@ -257,13 +282,15 @@ export const useEvalProgressStore = defineStore('evalProgress', () => {
     logs.value = []
     evalMode.value = 'api'
     stopHeartbeat()
+    stopAgentPoll()
     disconnectWS()
   }
 
   return {
     running, runId, progress, statusText,
     heartbeatActive, heartbeatStalled, lastUpdateTime,
-    logs, evalMode, progressPercent,
+    logs, evalMode, progressPercent, agentConnected,
     startEval, recoverRunningEval, checkStatus, cancelEval, reset,
+    startAgentPoll, stopAgentPoll,
   }
 })

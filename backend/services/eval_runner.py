@@ -50,6 +50,38 @@ def _is_natural_question(question: str, category: str = "") -> bool:
         return False
     return not UCLOUD_QUESTION_PATTERN.search(question or "")
 
+async def calculate_and_save_geo_scores(run_id: str, model_key: str, model_name: str,
+                                         all_results: List[Dict], questions: List[Dict]):
+    """计算并保存 GEO 评分（全局 + 品类），供 eval_runner、import API、agent 共用"""
+    from analyzer import AnalysisResult
+    calculator = MetricsCalculator()
+
+    if not all_results:
+        return
+
+    # 全局评分
+    results = [_dict_to_analysis(r) for r in all_results]
+    scores = calculator.calculate_scores(results)
+    scores_dict = _scores_to_dict(scores)
+    await save_geo_scores(run_id, model_key, model_name, None, scores_dict)
+
+    # 品类评分
+    categories = {}
+    for r in all_results:
+        qid = r["question_id"]
+        for q in questions:
+            if q["id"] == qid:
+                cat = q.get("category", "未分类")
+                categories.setdefault(cat, []).append(r)
+                break
+
+    for cat, cat_results in categories.items():
+        cat_analysis = [_dict_to_analysis(r) for r in cat_results]
+        cat_scores = calculator.calculate_scores(cat_analysis)
+        cat_dict = _scores_to_dict(cat_scores)
+        await save_geo_scores(run_id, model_key, model_name, cat, cat_dict)
+
+
 # 全局任务管理
 _active_tasks: Dict[str, asyncio.Task] = {}
 
@@ -139,7 +171,41 @@ async def start_evaluation(
         "temperature": temperature, "delay": delay, "mode": mode
     }, mode=mode)
 
-    # 启动后台任务
+    # WebChat 模式：委托给本地 Agent
+    if mode == "webchat":
+        from routers.agent import get_connected_agent, send_task_to_agent
+
+        agent = get_connected_agent()
+        if not agent:
+            raise ValueError("WebChat 模式需要本地 Agent，请先在本地启动 Agent 脚本")
+
+        # 加载 auth_states
+        auth_states = {}
+        from web_chat_auth import load_auth_state
+        for mk in model_keys:
+            state = load_auth_state(mk)
+            if state:
+                auth_states[mk] = state
+
+        # 构建简化的问题列表（只发必要字段，减小 WS 消息体积）
+        questions_simple = [
+            {"id": q["id"], "question": q["question"], "category": q.get("category", "")}
+            for q in q_list
+        ]
+
+        await send_task_to_agent(agent, {
+            "type": "task.assign",
+            "run_id": run_id,
+            "name": name,
+            "model_keys": model_keys,
+            "questions": questions_simple,
+            "delay": delay,
+            "auth_states": auth_states,
+        })
+        logger.info(f"[EVAL {run_id}] Task assigned to Agent {agent.agent_id}")
+        return run_id
+
+    # API 模式：启动后台任务
     task = asyncio.create_task(
         _run_evaluation(run_id, available_models if mode == "api" else model_keys,
                         q_list, temperature, delay, ws_manager, mode)
@@ -303,32 +369,8 @@ async def _run_evaluation(
         for mk in model_keys:
             if not all_results[mk]:
                 continue
-
-            # 全局评分：提及率/TOP3 仅统计自然问题；引用率/情感值统计全部有效问题
-            from analyzer import AnalysisResult
-            results = [_dict_to_analysis(r) for r in all_results[mk]]
-            scores = calculator.calculate_scores(results)
-            scores_dict = _scores_to_dict(scores)
-            model_name = results[0].model_name if results else (all_results[mk][0].get("model_name") if all_results[mk] else mk)
-            await save_geo_scores(run_id, mk, model_name, None, scores_dict)
-
-            # 品类评分
-            categories = {}
-            for r in all_results[mk]:
-                qid = r["question_id"]
-                for q in questions:
-                    if q["id"] == qid:
-                        cat = q["category"]
-                        if cat not in categories:
-                            categories[cat] = []
-                        categories[cat].append(r)
-                        break
-
-            for cat, cat_results in categories.items():
-                cat_analysis = [_dict_to_analysis(r) for r in cat_results]
-                cat_scores = calculator.calculate_scores(cat_analysis)
-                cat_dict = _scores_to_dict(cat_scores)
-                await save_geo_scores(run_id, mk, model_name, cat, cat_dict)
+            model_name = (all_results[mk][0].get("model_name") if all_results[mk] else mk)
+            await calculate_and_save_geo_scores(run_id, mk, model_name, all_results[mk], questions)
 
         await update_run_status(run_id, "completed", completed)
 

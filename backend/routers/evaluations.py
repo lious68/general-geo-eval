@@ -182,7 +182,11 @@ async def import_local_results(
         await db.delete_run(run_id)
         raise HTTPException(500, f"写入分析结果失败: {e}")
 
-    # 写入 geo_scores
+    # 写入 geo_scores：先尝试从 JSON 导入，失败则从 analysis_results 重新计算
+    import logging
+    logger = logging.getLogger(__name__)
+    geo_scores_saved = False
+
     if geo_scores_data:
         try:
             for mk, scores_by_cat in geo_scores_data.items():
@@ -190,10 +194,42 @@ async def import_local_results(
                 for cat, scores in scores_by_cat.items():
                     # cat 为 None 表示全局评分
                     await db.save_geo_scores(run_id, mk, model_name, cat, scores)
+            geo_scores_saved = True
+            logger.info(f"导入 geo_scores 成功 (从 JSON)")
         except Exception as e:
-            # geo_scores 写入失败不阻塞，可以后续重新计算
-            import logging
-            logging.getLogger(__name__).warning(f"写入 geo_scores 失败 (可手动重新计算): {e}")
+            logger.warning(f"导入 geo_scores 失败，将从 analysis_results 重新计算: {e}")
+
+    # 如果 JSON 没有 geo_scores 或写入失败，从 analysis_results 重新计算
+    if not geo_scores_saved:
+        try:
+            calculator = MetricsCalculator()
+            for mk, results in analysis_results.items():
+                if not results:
+                    continue
+                model_name = results[0].get("model_name", mk)
+                analysis_objects = [_dict_to_analysis(r) for r in results]
+                scores = calculator.calculate_scores(analysis_objects)
+                scores_dict = _scores_to_dict(scores)
+                await db.save_geo_scores(run_id, mk, model_name, None, scores_dict)
+
+                # 按品类计算
+                categories_map = {}
+                for r in results:
+                    qid = r.get("question_id")
+                    for q in questions:
+                        if q.get("id") == qid:
+                            cat = q.get("category")
+                            categories_map.setdefault(cat, []).append(r)
+                            break
+                for cat, cat_results in categories_map.items():
+                    cat_analysis = [_dict_to_analysis(r) for r in cat_results]
+                    cat_scores = calculator.calculate_scores(cat_analysis)
+                    await db.save_geo_scores(run_id, mk, model_name, cat, _scores_to_dict(cat_scores))
+
+                geo_scores_saved = True
+                logger.info(f"重新计算 geo_scores 成功 (模型: {mk})")
+        except Exception as e:
+            logger.error(f"重新计算 geo_scores 也失败: {e}")
 
     # 标记为已完成
     await db.update_run_status(run_id, "completed", total)
@@ -207,6 +243,50 @@ async def import_local_results(
             "results_inserted": inserted,
         },
         "message": f"成功导入 {inserted} 条结果，{len(model_keys)} 个模型，{len(question_ids)} 个问题",
+    }
+
+
+@router.post("/{run_id}/recalculate-scores")
+async def recalculate_scores(run_id: str):
+    """从 analysis_results 重新计算 geo_scores
+
+    用于本地导入后 geo_scores 缺失的情况。
+    """
+    run = await db.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "评测不存在")
+
+    # 获取所有 analysis_results
+    results_by_model = {}
+    db_conn = await db.get_db()
+    try:
+        cursor = await db_conn.execute(
+            "SELECT * FROM analysis_results WHERE run_id=?", (run_id,)
+        )
+        for row in await cursor.fetchall():
+            r = dict(row)
+            mk = r["model_key"]
+            results_by_model.setdefault(mk, []).append(r)
+    finally:
+        await db_conn.close()
+
+    if not results_by_model:
+        raise HTTPException(400, "没有 analysis_results 数据")
+
+    # 重新计算
+    calculator = MetricsCalculator()
+    total = 0
+    for mk, results in results_by_model.items():
+        model_name = results[0].get("model_name", mk)
+        analysis_objects = [_dict_to_analysis(r) for r in results]
+        scores = calculator.calculate_scores(analysis_objects)
+        await db.save_geo_scores(run_id, mk, model_name, None, _scores_to_dict(scores))
+        total += len(results)
+
+    return {
+        "success": True,
+        "data": {"run_id": run_id, "models": list(results_by_model.keys()), "total_results": total},
+        "message": f"已重新计算 {len(results_by_model)} 个模型的 GEO 评分",
     }
 
 

@@ -19,6 +19,12 @@ import time
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
+# Windows 控制台默认 GBK 编码，切换为 UTF-8 避免 emoji 报错
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # ── 常量 ──
 SEP = "=" * 72
 MODEL_NAMES = {
@@ -409,6 +415,10 @@ def main():
         "--output",
         help="输出文件路径（默认: output/webchat_results_YYYYMMDD_HHMMSS.json）",
     )
+    parser.add_argument(
+        "--inline-questions", "-Q",
+        help='直接传入问题文本，用 || 分隔（不需要数据库），如 --inline-questions "什么是云计算？||推荐什么云服务？"',
+    )
 
     args = parser.parse_args()
 
@@ -453,7 +463,16 @@ def main():
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = f"output/webchat_results_{timestamp}.json"
 
-        if args.questions != "all":
+        if args.inline_questions:
+            # 直接传入问题文本
+            texts = args.inline_questions.split("||")
+            preloaded_questions = [
+                {"id": f"test_{i+1}", "category": "test", "question_type": "direct",
+                 "question": t.strip(), "tags": [], "difficulty": "medium"}
+                for i, t in enumerate(texts) if t.strip()
+            ]
+            print(f"  📝 使用内联问题: {len(preloaded_questions)} 个")
+        elif args.questions != "all":
             if "," in args.questions:
                 question_ids = args.questions.split(",")
             else:
@@ -465,7 +484,7 @@ def main():
         categories=categories,
         delay=delay,
         output_path=output_path,
-        questions=preloaded_questions if args.config else None,
+        questions=preloaded_questions,
     ))
 
 

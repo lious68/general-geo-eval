@@ -306,7 +306,7 @@ async def run_local_eval(
 
         model_name = MODEL_NAMES.get(mk, mk)
         results = [_dict_to_analysis(r) for r in all_results[mk]]
-        scores = calculator.calculate_scores(results)
+        scores = calculator.calculate_scores(results, questions=questions)
         geo_scores[mk] = {None: _scores_to_dict(scores)}
 
         print(f"  {model_name}: GEO={scores.geo_score:.1f} "
@@ -327,7 +327,8 @@ async def run_local_eval(
 
         for cat, cat_results in categories_map.items():
             cat_analysis = [_dict_to_analysis(r) for r in cat_results]
-            cat_scores = calculator.calculate_scores(cat_analysis)
+            cat_questions = [q for q in questions if q.get("category") == cat]
+            cat_scores = calculator.calculate_scores(cat_analysis, questions=cat_questions)
             geo_scores[mk][cat] = _scores_to_dict(cat_scores)
 
     # 5. 导出结果

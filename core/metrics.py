@@ -1,24 +1,59 @@
 """
 UCloud GEO 评估框架 - 指标计算引擎
-计算覆盖率、提及率、引用率、推荐率、情感值等核心GEO指标
+计算提及率、引用率、TOP3推荐率、情感值等核心GEO指标
+
+口径与 backend/database.py get_scores() 保持一致：
+- 提及率 / TOP3推荐率：分母仅自然问题（排除引导型、题干含UCloud/优刻得的）
+- 引用率 / 情感值：分母为全部有效问题
+- 引用率分子：使用有效引用口径（含UCloud官方引用 + UCloud相关第三方来源引用）
+- 情感值：全部有效响应的平均值
 """
+import re
 import logging
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
-from analyzer import AnalysisResult
+from analyzer import AnalysisResult, THIRD_PARTY_CITATION_DOMAINS
 
 logger = logging.getLogger(__name__)
+
+# 自然问题判定：排除引导型、题干含 UCloud/优刻得 的问题
+_UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
+
+
+def _is_natural_question(question: str, category: str = "") -> bool:
+    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    if category == "引导型":
+        return False
+    return not _UCLOUD_QUESTION_PATTERN.search(question or "")
+
+
+def _has_effective_citation(result: AnalysisResult) -> bool:
+    """判断是否有有效引用（与 database.py 口径一致）
+
+    有效引用 = UCloud官方引用 OR (回答提及UCloud时的第三方来源引用)
+    """
+    for c in result.citations:
+        if c.is_ucloud:
+            return True
+    # 第三方来源引用：回答提及了 UCloud 且有第三方域名引用
+    if result.ucloud_mentioned:
+        for c in result.citations:
+            if c.citation_type == "url" and not c.is_ucloud:
+                url = c.content.lower()
+                if any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
+                    return True
+    return False
 
 
 @dataclass
 class GEOScores:
     """GEO综合评分"""
-    # 核心指标
-    coverage_rate: float = 0.0        # 覆盖率
-    mention_rate: float = 0.0         # 提及率
-    citation_rate: float = 0.0        # 引用率
-    recommendation_rate: float = 0.0  # 推荐率
+    # 核心指标（4个基础指标 + GEO综合分）
+    coverage_rate: float = 0.0        # 提及率（UCloud被提及的自然问题占比）
+    mention_rate: float = 0.0         # 原提及频次指标（已不参与GEO综合得分）
+    citation_rate: float = 0.0        # 引用率（有效引用占比）
+    recommendation_rate: float = 0.0  # TOP3推荐率
     sentiment_score: float = 0.0      # 情感值
 
     # 细分指标
@@ -55,19 +90,26 @@ class ModelComparison:
 
 
 class MetricsCalculator:
-    """GEO指标计算器"""
+    """GEO指标计算器（口径与仪表盘 backend/database.py 一致）"""
 
     # 综合GEO分数的权重配置
     GEO_WEIGHTS = {
-        "coverage_rate": 0.45,        # 提及率权重（UCloud被提及的有效响应占比）
+        "coverage_rate": 0.45,        # 提及率权重
         "mention_rate": 0.0,          # 原提及频次指标已不参与GEO综合得分
         "citation_rate": 0.25,        # 引用率权重
         "recommendation_rate": 0.20,  # TOP3推荐率权重
         "sentiment_score": 0.10,      # 情感值权重
     }
 
-    def calculate_scores(self, results: List[AnalysisResult]) -> GEOScores:
-        """计算一组分析结果的GEO评分"""
+    def calculate_scores(self, results: List[AnalysisResult],
+                         questions: List[Dict] = None) -> GEOScores:
+        """计算一组分析结果的GEO评分
+
+        Args:
+            results: 分析结果列表
+            questions: 问题列表（用于区分自然问题），格式 [{"id": ..., "question": ..., "category": ...}, ...]
+                       如果不传，则按默认规则判定自然问题
+        """
         scores = GEOScores()
 
         # 过滤有效结果
@@ -81,13 +123,34 @@ class MetricsCalculator:
         if not valid_results:
             return scores
 
-        # ---- 覆盖率 ----
-        # UCloud被提及的问题数 / 有效问题总数
-        mentioned_count = sum(1 for r in valid_results if r.ucloud_mentioned)
-        scores.coverage_rate = round(mentioned_count / len(valid_results), 4)
+        # 区分自然问题（与仪表盘口径一致）
+        # 提及率/TOP3推荐率仅统计自然问题；引用率/情感值统计全部有效问题
+        question_map = {}
+        if questions:
+            for q in questions:
+                question_map[q.get("id", "")] = q
 
-        # ---- 提及率 ----
-        # 平均每条响应中的UCloud提及次数（含位置权重调整）
+        natural_results = []
+        for r in valid_results:
+            q = question_map.get(r.question_id, {})
+            question_text = q.get("question", "")
+            category = q.get("category", "")
+            if _is_natural_question(question_text, category):
+                natural_results.append(r)
+
+        natural_count = len(natural_results) if natural_results else len(valid_results)
+
+        # ---- 提及率（coverage_rate）----
+        # 分母：自然问题数
+        # 分子：UCloud被提及的自然问题数
+        if natural_results:
+            mentioned_count = sum(1 for r in natural_results if r.ucloud_mentioned)
+            scores.coverage_rate = round(mentioned_count / natural_count, 4)
+        else:
+            mentioned_count = sum(1 for r in valid_results if r.ucloud_mentioned)
+            scores.coverage_rate = round(mentioned_count / len(valid_results), 4)
+
+        # ---- 原提及率（mention_rate，不参与GEO得分）----
         weighted_mentions = []
         for r in valid_results:
             if r.ucloud_mentioned:
@@ -102,39 +165,44 @@ class MetricsCalculator:
         )
 
         # ---- 引用率 ----
-        # 包含UCloud引用的响应数 / 有效响应总数
-        cited_count = sum(1 for r in valid_results if r.has_citation)
+        # 分母：全部有效问题
+        # 分子：有效引用数（含UCloud官方引用 + UCloud相关第三方来源引用）
+        cited_count = sum(1 for r in valid_results if _has_effective_citation(r))
         scores.citation_rate = round(cited_count / len(valid_results), 4)
 
-        # ---- TOP3 推荐率 ----
-        # UCloud进入品牌推荐列表Top3的响应数 / 有效响应总数
-        top3_count = sum(
-            1 for r in valid_results
-            if r.ucloud_rank is not None and r.ucloud_rank <= 3
-        )
-        scores.recommendation_rate = round(top3_count / len(valid_results), 4)
+        # ---- TOP3推荐率 ----
+        # 分母：自然问题数
+        # 分子：UCloud排名≤3的自然问题数
+        if natural_results:
+            top3_count = sum(
+                1 for r in natural_results
+                if r.ucloud_rank is not None and r.ucloud_rank <= 3
+            )
+            scores.recommendation_rate = round(top3_count / natural_count, 4)
 
-        # 细分推荐强度
-        strong_count = sum(
-            1 for r in valid_results
-            if r.ucloud_recommendation_strength == "strong"
-        )
-        moderate_count = sum(
-            1 for r in valid_results
-            if r.ucloud_recommendation_strength == "moderate"
-        )
-        scores.strong_recommend_rate = round(strong_count / len(valid_results), 4)
-        scores.moderate_recommend_rate = round(moderate_count / len(valid_results), 4)
+            strong_count = sum(
+                1 for r in natural_results
+                if r.ucloud_recommendation_strength == "strong"
+            )
+            moderate_count = sum(
+                1 for r in natural_results
+                if r.ucloud_recommendation_strength == "moderate"
+            )
+            scores.strong_recommend_rate = round(strong_count / natural_count, 4)
+            scores.moderate_recommend_rate = round(moderate_count / natural_count, 4)
+        else:
+            top3_count = sum(
+                1 for r in valid_results
+                if r.ucloud_rank is not None and r.ucloud_rank <= 3
+            )
+            scores.recommendation_rate = round(top3_count / len(valid_results), 4)
 
         # ---- 情感值 ----
-        # 仅计算UCloud被提及的响应的情感平均值
-        mentioned_results = [r for r in valid_results if r.ucloud_mentioned]
-        if mentioned_results:
-            scores.sentiment_score = round(
-                sum(r.sentiment_score for r in mentioned_results) / len(mentioned_results), 4
-            )
-        else:
-            scores.sentiment_score = 0.0
+        # 分母：全部有效问题
+        # 分子：所有有效响应的情感平均值
+        scores.sentiment_score = round(
+            sum(r.sentiment_score for r in valid_results) / len(valid_results), 4
+        )
 
         # ---- 位置权重 ----
         weighted_results = [r for r in valid_results if r.ucloud_mentioned]
@@ -161,13 +229,11 @@ class MetricsCalculator:
 
     def _calculate_geo_score(self, scores: GEOScores) -> float:
         """计算综合GEO分数（0-100）"""
-        # 各指标归一化到0-1范围
-        coverage = scores.coverage_rate  # 0-1，仪表盘显示为提及率
-        citation = scores.citation_rate  # 0-1
-        recommendation = scores.recommendation_rate  # 0-1，TOP3推荐率
-        sentiment = scores.sentiment_score  # 0-1
+        coverage = scores.coverage_rate      # 提及率
+        citation = scores.citation_rate      # 引用率
+        recommendation = scores.recommendation_rate  # TOP3推荐率
+        sentiment = scores.sentiment_score    # 情感值
 
-        # 加权求和
         weighted_sum = (
             coverage * self.GEO_WEIGHTS["coverage_rate"] +
             citation * self.GEO_WEIGHTS["citation_rate"] +
@@ -175,7 +241,6 @@ class MetricsCalculator:
             sentiment * self.GEO_WEIGHTS["sentiment_score"]
         )
 
-        # 转换为0-100
         geo_score = round(weighted_sum * 100, 2)
         return geo_score
 
@@ -245,32 +310,32 @@ class MetricsCalculator:
         """生成评分卡"""
         return {
             "GEO综合得分": scores.geo_score,
-            "覆盖率": {
+            "提及率": {
                 "值": scores.coverage_rate,
                 "百分比": f"{scores.coverage_rate * 100:.1f}%",
-                "说明": f"在{scores.valid_responses}个有效问题中，UCloud被提及的比例",
+                "说明": f"在自然问题中，UCloud被提及的比例",
             },
-            "提及率": {
+            "提及频次": {
                 "值": scores.mention_rate,
                 "平均提及次数": scores.avg_mention_count,
-                "说明": "平均每条响应中UCloud的提及次数（含位置权重）",
+                "说明": "平均每条响应中UCloud的提及次数（含位置权重，不参与GEO得分）",
             },
             "引用率": {
                 "值": scores.citation_rate,
                 "百分比": f"{scores.citation_rate * 100:.1f}%",
-                "说明": "包含UCloud引用/链接的响应比例",
+                "说明": "包含有效引用（UCloud官方+相关第三方来源）的响应比例",
             },
-            "推荐率": {
+            "TOP3推荐率": {
                 "值": scores.recommendation_rate,
                 "百分比": f"{scores.recommendation_rate * 100:.1f}%",
                 "强推荐率": f"{scores.strong_recommend_rate * 100:.1f}%",
                 "中等推荐率": f"{scores.moderate_recommend_rate * 100:.1f}%",
-                "说明": "UCloud被推荐的响应比例",
+                "说明": "在自然问题中UCloud进入品牌推荐Top3的比例",
             },
             "情感值": {
                 "值": scores.sentiment_score,
                 "标签": "正面" if scores.sentiment_score > 0.6 else ("负面" if scores.sentiment_score < 0.4 else "中性"),
-                "说明": "UCloud被提及时的平均情感倾向",
+                "说明": "全部有效响应的平均情感倾向",
             },
             "位置权重": {
                 "值": scores.avg_position_weight,

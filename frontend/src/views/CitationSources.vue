@@ -2,6 +2,9 @@
   <div class="citation-sources">
     <h2 class="page-title">🔗 引用源情况</h2>
     <p class="page-subtitle">汇总评测问题中被引用的平台来源，支持按时间、AI 渠道和来源名称筛选</p>
+    <el-alert type="warning" :closable="false" style="margin-bottom:16px">
+      仅作优化方向参考，文心一言、豆包、千问受平台限制展示不全
+    </el-alert>
 
     <el-card class="filter-card">
       <div class="filters">

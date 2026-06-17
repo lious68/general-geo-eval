@@ -1,5 +1,6 @@
 """三级任务路由：任务 → 模型 → 问题（仅 WebChat 模式范围）。"""
 import json
+from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from routers.auth import require_admin
 import models
@@ -38,6 +39,8 @@ async def get_task(task_id: str):
 
 @router.delete("/{task_id}")
 async def delete_task(task_id: str, user=Depends(require_admin)):
+    if not await db.get_task(task_id):
+        raise HTTPException(404, "任务不存在")
     await db.delete_task(task_id)
     return {"success": True}
 
@@ -59,10 +62,10 @@ async def create_batch(task_id: str, req: models.BatchCreate, user=Depends(requi
 async def import_results(task_id: str, file: UploadFile = File(...),
                          user=Depends(require_admin)):
     """导入本地 runner 结果 JSON，按 (task,model,question) 合并去重 + 重算。"""
+    content = await file.read()
     try:
-        content = await file.read()
         data = json.loads(content)
-    except Exception as e:
+    except json.JSONDecodeError as e:
         raise HTTPException(400, f"JSON 解析失败: {e}")
     try:
         result = await task_service.import_batch_results(task_id, data)
@@ -73,13 +76,13 @@ async def import_results(task_id: str, file: UploadFile = File(...),
 
 
 @router.get("/{task_id}/scores")
-async def get_scores(task_id: str, category: str = None):
+async def get_scores(task_id: str, category: Optional[str] = None):
     rows = await db.get_task_scores(task_id, category)
     return {"success": True, "data": rows}
 
 
 @router.get("/{task_id}/details")
-async def get_details(task_id: str, model_key: str = None, limit: int = 200, offset: int = 0):
+async def get_details(task_id: str, model_key: Optional[str] = None, limit: int = 200, offset: int = 0):
     rows = await db.get_task_results(task_id, model_key)
     rows = rows[offset: offset + limit]
     return {"success": True, "data": rows}

@@ -150,6 +150,7 @@ class EvalScheduler:
         on_unit_done: Optional[OnUnitDone] = None,
         on_progress: Optional[OnProgress] = None,
         extra_policy: Optional[Dict[str, dict]] = None,
+        per_model_questions: Optional[Dict[str, List[Dict]]] = None,
     ):
         self.run_id = run_id
         self.models = list(models)
@@ -164,8 +165,24 @@ class EvalScheduler:
         self.limiters: Dict[str, RateLimiter] = {
             mk: RateLimiter(mk, self._policy_for(mk)) for mk in self.models
         }
-        # 问题按 id 排序，保证交错推进有稳定节奏（仅节奏，不影响正确性）
-        self._q_order = {q["id"]: i for i, q in enumerate(questions)}
+        # 每模型独立题区间（v2 配置 units）。缺省 = 所有模型共享 questions（旧行为）。
+        self.per_model_questions = per_model_questions
+        if per_model_questions:
+            # 限流器需覆盖所有出现过的模型
+            extra_models = [mk for mk in per_model_questions if mk not in self.models]
+            for mk in extra_models:
+                self.models.append(mk)
+                self.limiters[mk] = RateLimiter(mk, self._policy_for(mk))
+            # 题序：所有模型题集的并集
+            seen = {}
+            for q in questions:
+                seen.setdefault(q["id"], q)
+            for mk, qs in per_model_questions.items():
+                for q in qs:
+                    seen.setdefault(q["id"], q)
+            self._q_order = {qid: i for i, qid in enumerate(sorted(seen.keys()))}
+        else:
+            self._q_order = {q["id"]: i for i, q in enumerate(questions)}
         self._total = 0
 
     def _policy_for(self, model_key: str) -> dict:
@@ -179,14 +196,24 @@ class EvalScheduler:
     # ---------- 准备 ----------
 
     async def prepare(self) -> None:
-        """展开单元（幂等）+ 重置残留 running。"""
+        """展开单元（幂等）+ 重置残留 running。每模型按各自题区间展开。"""
         model_names = {mk: self._model_name(mk) for mk in self.models}
-        self._total = self.store.expand_units(
-            self.run_id, self.models, [q["id"] for q in self.questions], model_names
-        )
+        if self.per_model_questions:
+            total = 0
+            for mk in self.models:
+                qs = self.per_model_questions.get(mk, self.questions)
+                total += self.store.expand_units(
+                    self.run_id, [mk], [q["id"] for q in qs],
+                    {mk: model_names.get(mk, mk)}
+                )
+            self._total = total
+        else:
+            self._total = self.store.expand_units(
+                self.run_id, self.models, [q["id"] for q in self.questions], model_names
+            )
         reset = self.store.reset_stale_running(self.run_id)
         logger.info(f"[SCHED {self.run_id}] prepared {self._total} units"
-                    f"({len(self.models)} models × {len(self.questions)} q), reset {reset} stale running")
+                    f"({len(self.models)} models), reset {reset} stale running")
 
     def _model_name(self, mk: str) -> str:
         for q in self.questions:  # 占位，实际名字由 client 提供
@@ -234,8 +261,12 @@ class EvalScheduler:
                     return
             name = getattr(client, "name", model_key)
 
-            # 预读该模型的问题文本
-            q_text = {q["id"]: q["question"] for q in self.questions}
+            # 预读该模型的问题文本（每模型题区间）
+            if self.per_model_questions:
+                qs = self.per_model_questions.get(model_key, self.questions)
+            else:
+                qs = self.questions
+            q_text = {q["id"]: q["question"] for q in qs}
 
             while True:
                 if self._all_done_for_model(model_key):

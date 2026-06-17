@@ -134,6 +134,26 @@ def main():
     assert s.get("runRes", "a", "Q1").content == "旧结果"
     print("✅ PASS: 断点续跑（done 不重跑，仅补 pending）")
 
+    # ── 5. 每模型独立题区间 ──
+    s = SqliteUnitStore(os.path.join(tmp, "permodel.db"))
+    models5 = ["a", "b"]
+    qs5 = make_questions(4)
+    reg = {m: MockClient(m, {}, []) for m in models5}
+    pmq = {"a": [qs5[0], qs5[1], qs5[3]],  # a 跑 Q1,Q2,Q4
+           "b": [qs5[1], qs5[2]]}           # b 跑 Q2,Q3
+    async def m5():
+        await EvalScheduler("runP", models5, qs5, s, make_factory(reg),
+                            extra_policy=fast_policy(models5),
+                            per_model_questions=pmq).run()
+    asyncio.run(m5())
+    # a 应 done Q1,Q2,Q4；b 应 done Q2,Q3
+    a_done = {u.question_id for u in s.list_units("runP", "done") if u.model_key == "a"}
+    b_done = {u.question_id for u in s.list_units("runP", "done") if u.model_key == "b"}
+    assert a_done == {"Q1", "Q2", "Q4"}, a_done
+    assert b_done == {"Q2", "Q3"}, b_done
+    assert s.counts("runP")["done"] == 5, s.counts("runP")
+    print("✅ PASS: 每模型独立题区间（per_model_questions）")
+
     print("\n🎉 全部自检通过")
 
 

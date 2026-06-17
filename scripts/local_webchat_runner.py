@@ -170,13 +170,15 @@ def _new_run_id() -> str:
 
 
 def _save_manifest(run_id: str, name: str, model_keys: List[str],
-                   questions: List[Dict], delay: float, output_path: str) -> str:
+                   questions: List[Dict], delay: float, output_path: str,
+                   task_meta: Optional[Dict] = None) -> str:
     """保存任务清单（断点续跑所需：问题集 + 模型 + 参数）。"""
     os.makedirs(LOCAL_RUNS_DIR, exist_ok=True)
     path = os.path.join(LOCAL_RUNS_DIR, f"{run_id}.manifest.json")
     manifest = {
         "run_id": run_id, "name": name, "model_keys": model_keys,
         "delay": delay, "output_path": output_path, "questions": questions,
+        "task_meta": task_meta or {},
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -191,23 +193,26 @@ def _load_manifest(run_id: str) -> Optional[Dict]:
         return json.load(f)
 
 
-def _build_output(run_id, model_keys, questions, all_results, geo_scores) -> Dict:
-    # 修复 geo_scores 中的 None 键（JSON 序列化时会变成字符串 "null"）
+def _build_output(run_id, model_keys, questions, all_results, geo_scores,
+                  task_meta=None) -> Dict:
     fixed_geo_scores = {}
     for mk, scores_by_cat in geo_scores.items():
         fixed_geo_scores[mk] = {}
         for cat, scores in scores_by_cat.items():
             cat_key = cat if cat is not None else "__GLOBAL__"
             fixed_geo_scores[mk][cat_key] = scores
+    meta = {
+        "generated_at": datetime.now().isoformat(),
+        "mode": "webchat_local",
+        "run_id": run_id,
+        "model_keys": model_keys,
+        "total_questions": len(questions),
+        "total_results": sum(len(v) for v in all_results.values()),
+    }
+    if task_meta:
+        meta.update(task_meta)  # 透传 task_id / batch_id
     return {
-        "meta": {
-            "generated_at": datetime.now().isoformat(),
-            "mode": "webchat_local",
-            "run_id": run_id,
-            "model_keys": model_keys,
-            "total_questions": len(questions),
-            "total_results": sum(len(v) for v in all_results.values()),
-        },
+        "meta": meta,
         "questions": questions,
         "analysis_results": {mk: all_results[mk] for mk in model_keys},
         "geo_scores": fixed_geo_scores,
@@ -230,6 +235,8 @@ async def run_local_eval(
     run_id: Optional[str] = None,
     resume: bool = False,
     name: str = "GEO评估",
+    per_model_questions: Optional[Dict[str, List[Dict]]] = None,
+    task_meta: Optional[Dict] = None,
 ):
     """执行本地 WebChat 评测（三级任务调度：任务 → 模型 → 问题）
 
@@ -248,6 +255,7 @@ async def run_local_eval(
         delay = manifest.get("delay", delay)
         output_path = manifest.get("output_path", output_path)
         name = manifest.get("name", name)
+        task_meta = manifest.get("task_meta") or None
         print(f"  ♻️  恢复模式: run_id={run_id}")
 
     print(SEP)
@@ -277,7 +285,7 @@ async def run_local_eval(
     print(f"[2/5] 任务 run_id = {run_id}")
     store = SqliteUnitStore(os.path.join(LOCAL_RUNS_DIR, f"{run_id}.db"))
     if not resume:
-        _save_manifest(run_id, name, model_keys, questions, delay, output_path)
+        _save_manifest(run_id, name, model_keys, questions, delay, output_path, task_meta)
 
     partial_path = os.path.join(OUTPUT_DIR, f"{run_id}.partial.json")
 
@@ -300,7 +308,7 @@ async def run_local_eval(
 
     # 3. 回调
     def _dump_partial():
-        out = _build_output(run_id, model_keys, questions, all_results, {})
+        out = _build_output(run_id, model_keys, questions, all_results, {}, task_meta=task_meta)
         _write_json(partial_path, out)
 
     async def on_unit_done(unit, response):
@@ -349,6 +357,7 @@ async def run_local_eval(
         run_id=run_id, models=model_keys, questions=questions, store=store,
         client_factory=client_factory, on_unit_done=on_unit_done, on_progress=on_progress,
         extra_policy=extra_policy,
+        per_model_questions=per_model_questions,
     )
     await scheduler.run()
 
@@ -385,7 +394,7 @@ async def run_local_eval(
             geo_scores[mk][cat] = _scores_to_dict(cat_scores)
 
     print("\n[5/5] 导出结果...")
-    output = _build_output(run_id, model_keys, questions, all_results, geo_scores)
+    output = _build_output(run_id, model_keys, questions, all_results, geo_scores, task_meta=task_meta)
     _write_json(output_path, output)
     print(f"  ✅ 结果已保存: {output_path}")
     print(f"  文件大小: {os.path.getsize(output_path) / 1024:.1f} KB")
@@ -514,40 +523,52 @@ def main():
     output_path = args.output
     task_name = "GEO评估"
 
+    per_model_questions = None
+    task_meta = None
     if args.config:
-        # 从配置文件加载（云联动模式）
         print(f"  📥 从配置文件加载: {args.config}")
         with open(args.config, "r", encoding="utf-8") as f:
             config = json.load(f)
 
-        model_keys = config["task"]["model_keys"]
-        delay = config["task"].get("delay", delay)
-        preloaded_questions = config.get("questions")  # 配置里的问题数据
+        delay = config.get("delay", config.get("task", {}).get("delay", delay))
+        preloaded_questions = config.get("questions")
         question_ids = config.get("question_ids")
         categories = config.get("categories")
+        task_name = config.get("task_name") or config.get("task", {}).get("name", "GEO评估")
 
-        # 默认输出文件名带任务名
+        if config.get("version") == 2 or "units" in config:
+            # v2：每模型独立题区间
+            units = config.get("units", [])
+            model_keys = [u["model_key"] for u in units]
+            q_map_cfg = {q["id"]: q for q in (preloaded_questions or [])}
+            per_model_questions = {
+                u["model_key"]: [q_map_cfg[qid] for qid in u["question_ids"] if qid in q_map_cfg]
+                for u in units
+            }
+            # 缺题对象时退化为最小 dict（仅 id）
+            for mk, qs in per_model_questions.items():
+                if not qs:
+                    per_model_questions[mk] = [{"id": qid, "question": qid, "category": "",
+                                                "question_type": "", "tags": [], "difficulty": "medium"}
+                                               for qid in next(u["question_ids"] for u in units if u["model_key"] == mk)]
+            task_meta = {"task_id": config.get("task_id"), "batch_id": config.get("batch_id")}
+            print(f"  任务(v2): {task_name} | task_id={task_meta['task_id']} | batch_id={task_meta['batch_id']}")
+            print(f"  模型: {', '.join(model_keys)} | 单元: {sum(len(v) for v in per_model_questions.values())}")
+        else:
+            # v1 兼容
+            model_keys = config["task"]["model_keys"]
+            task_name = config["task"].get("name", "GEO评估")
+
         if not output_path:
-            task_name = config["task"].get("name", "webchat")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in task_name)
             output_path = f"output/webchat_{safe_name}_{timestamp}.json"
-        else:
-            task_name = config["task"].get("name", "GEO评估")
-
-        print(f"  任务: {config['task'].get('name', 'N/A')}")
-        print(f"  模型: {', '.join(model_keys)}")
-        print(f"  问题: {len(preloaded_questions) if preloaded_questions else '全部'} 个")
-        print(f"  延迟: {delay}s")
         print()
     else:
-        # 手动模式
         if output_path is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = f"output/webchat_results_{timestamp}.json"
-
         if args.inline_questions:
-            # 直接传入问题文本
             texts = args.inline_questions.split("||")
             preloaded_questions = [
                 {"id": f"test_{i+1}", "category": "test", "question_type": "direct",
@@ -569,6 +590,8 @@ def main():
         output_path=output_path,
         questions=preloaded_questions,
         name=task_name,
+        per_model_questions=per_model_questions,
+        task_meta=task_meta,
     ))
 
 

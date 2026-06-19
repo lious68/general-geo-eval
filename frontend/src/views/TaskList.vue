@@ -70,6 +70,21 @@
                           </div>
                         </div>
                       </div>
+                      <div class="import-logs-box">
+                        <div class="import-logs-head">
+                          📥 导入历史（{{ (batchImportLogsOf(b.batch_id) || []).length }} 次）
+                        </div>
+                        <div v-if="batchImportLogsLoading[b.batch_id]" class="batch-results-tip">加载中…</div>
+                        <div v-else-if="!(batchImportLogsOf(b.batch_id) || []).length" class="batch-results-tip">暂无导入记录</div>
+                        <div v-else class="import-log-list">
+                          <div v-for="lg in (batchImportLogsOf(b.batch_id) || [])" :key="lg.id" class="import-log-item">
+                            <span class="il-time">{{ fmtImportTimeFull(lg.imported_at) }}</span>
+                            <el-tag size="small" type="success">{{ lg.results_inserted }} 条</el-tag>
+                            <span class="il-file">{{ lg.file_name || '(未命名)' }}</span>
+                            <span v-if="lg.file_size != null" class="il-size">{{ fmtFileSize(lg.file_size) }}</span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </template>
                 </el-table-column>
@@ -92,10 +107,11 @@
                 <el-table-column label="题数" width="70">
                   <template #default="{ row: b }">{{ (b.question_ids || []).length }}</template>
                 </el-table-column>
-                <el-table-column label="结果" width="120">
+                <el-table-column label="结果" width="150">
                   <template #default="{ row: b }">
                     <el-tag v-if="(b.result_count || 0) > 0" size="small" type="success">已导入 {{ b.result_count }}</el-tag>
                     <el-tag v-else size="small" type="info" effect="plain">未导入</el-tag>
+                    <div v-if="b.last_import_at" class="last-import-time">{{ fmtImportTime(b.last_import_at) }}</div>
                   </template>
                 </el-table-column>
                 <el-table-column label="状态" width="130">
@@ -190,7 +206,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
-import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults } from '../api/tasks'
+import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs } from '../api/tasks'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const router = useRouter()
@@ -218,6 +234,47 @@ const importBatch = ref(null)   // { task_id, batch_id }
 // 批次展开结果（懒加载）
 const batchResultsMap = ref({})       // batch_id -> 结果数组
 const batchResultsLoading = ref({})   // batch_id -> bool
+
+const batchImportLogsMap = ref({})       // batch_id -> 日志数组
+const batchImportLogsLoading = ref({})   // batch_id -> bool
+
+function batchImportLogsOf(batchId) { return batchImportLogsMap.value[batchId] }
+
+async function loadBatchImportLogs(b) {
+  const taskId = b.task_id
+  const batchId = b.batch_id
+  if (!taskId || !batchId) return
+  batchImportLogsLoading.value = { ...batchImportLogsLoading.value, [batchId]: true }
+  try {
+    const res = await getBatchImportLogs(taskId, batchId)
+    if (res?.success) batchImportLogsMap.value = { ...batchImportLogsMap.value, [batchId]: res.data || [] }
+  } catch (e) {
+    /* 静默：审计日志加载失败不阻断结果展示 */
+  } finally {
+    batchImportLogsLoading.value = { ...batchImportLogsLoading.value, [batchId]: false }
+  }
+}
+
+function fmtImportTime(s) {
+  if (!s) return ''
+  const d = new Date(String(s).replace(' ', 'T'))
+  if (isNaN(d.getTime())) return String(s)
+  const p = n => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+function fmtImportTimeFull(s) {
+  if (!s) return ''
+  const d = new Date(String(s).replace(' ', 'T'))
+  if (isNaN(d.getTime())) return String(s)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+function fmtFileSize(n) {
+  if (!n && n !== 0) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
 
 async function load() {
   loading.value = true
@@ -266,8 +323,12 @@ async function loadBatchResults(b) {
   if (!taskId || !batchId) return
   batchResultsLoading.value = { ...batchResultsLoading.value, [batchId]: true }
   try {
-    const res = await getBatchResults(taskId, batchId)
+    const [res, logs] = await Promise.all([
+      getBatchResults(taskId, batchId),
+      getBatchImportLogs(taskId, batchId),
+    ])
     if (res?.success) batchResultsMap.value = { ...batchResultsMap.value, [batchId]: res.data || [] }
+    if (logs?.success) batchImportLogsMap.value = { ...batchImportLogsMap.value, [batchId]: logs.data || [] }
   } catch (e) {
     ElMessage.error(`加载批次结果失败: ${e.message || e}`)
   } finally {
@@ -459,4 +520,12 @@ onMounted(async () => { await load() })
 .result-ans { font-size: 13px; color: #333; }
 .result-error { color: #c0392b; font-size: 13px; }
 .result-pre { white-space: pre-wrap; word-break: break-word; background: #f6f8fa; border-radius: 4px; padding: 8px; max-height: 240px; overflow: auto; margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+.last-import-time { font-size: 11px; color: #a8abb2; margin-top: 2px; }
+.import-logs-box { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ebeef5; }
+.import-logs-head { font-size: 13px; color: #555; font-weight: 600; margin-bottom: 8px; }
+.import-log-list { display: flex; flex-direction: column; gap: 6px; }
+.import-log-item { display: flex; align-items: center; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+.il-time { font-family: monospace; color: #333; }
+.il-file { color: #888; }
+.il-size { color: #bbb; }
 </style>

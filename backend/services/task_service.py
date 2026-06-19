@@ -77,14 +77,6 @@ async def create_batch_config(task_id: str, model_keys: List[str],
 
     batch_id = _new_id("batch")
     run_id = _new_id("run")
-    await db.add_task_batch(
-        run_id=run_id, task_id=task_id, batch_id=batch_id,
-        name=task["name"], model_keys=model_keys,
-        question_ids=union_qids,
-        per_model=per_model_question_ids,
-        config={"delay": delay, "per_model_question_ids": per_model_question_ids},
-    )
-
     config = {
         "version": 2,
         "task_id": task_id,
@@ -97,7 +89,50 @@ async def create_batch_config(task_id: str, model_keys: List[str],
         "questions": questions,
         "delay": delay,
     }
+    # 持久化完整 v2 配置，便于以后重下/重跑
+    await db.add_task_batch(
+        run_id=run_id, task_id=task_id, batch_id=batch_id,
+        name=task["name"], model_keys=model_keys,
+        question_ids=union_qids,
+        per_model=per_model_question_ids,
+        config=config,
+    )
     return config
+
+
+async def get_batch_config(task_id: str, batch_id: str) -> Dict:
+    """取某批次的 v2 配置（优先返回已持久化的完整配置；旧批次只有片段则就地重建）。"""
+    task = await db.get_task(task_id)
+    if not task:
+        raise ValueError("任务不存在")
+    batches = await db.list_task_batches(task_id)
+    b = next((x for x in batches if x.get("batch_id") == batch_id), None)
+    if not b:
+        raise ValueError("批次不存在")
+
+    cfg = b.get("config") or {}
+    if cfg.get("version") == 2 and cfg.get("units"):
+        return cfg
+
+    # 兼容旧批次：仅存了片段 {delay, per_model_question_ids}，就地重建完整 v2 配置
+    per_model = cfg.get("per_model_question_ids") or {}
+    model_keys = b.get("model_keys") or list(per_model.keys())
+    union_qids = sorted({q for qs in per_model.values() for q in qs}) or (b.get("question_ids") or [])
+    all_questions = await db.get_questions(active_only=True)
+    q_map = {q["id"]: q for q in all_questions}
+    questions = [q_map[qid] for qid in union_qids if qid in q_map]
+    return {
+        "version": 2,
+        "task_id": task_id,
+        "task_name": task["name"],
+        "batch_id": batch_id,
+        "run_id": b.get("id"),
+        "generated_at": b.get("started_at") or datetime.utcnow().isoformat(),
+        "total_question_ids": task["question_ids"],
+        "units": [{"model_key": mk, "question_ids": per_model.get(mk, [])} for mk in model_keys],
+        "questions": questions,
+        "delay": cfg.get("delay", 8.0),
+    }
 
 
 async def import_batch_results(task_id: str, data: Dict) -> Dict:

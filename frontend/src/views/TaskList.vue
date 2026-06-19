@@ -59,6 +59,13 @@
                     <el-tag size="small" :type="batchTagType(b.status)">{{ b.status || '-' }}</el-tag>
                   </template>
                 </el-table-column>
+                <el-table-column label="操作" width="110" fixed="right">
+                  <template #default="{ row: b }">
+                    <el-button size="small" link type="primary" @click="downloadBatchConfig(b)">
+                      ⬇ 下载配置
+                    </el-button>
+                  </template>
+                </el-table-column>
               </el-table>
 
               <div v-if="!expandLoading[row.id] && !(batchesOf(row.id) || []).length" class="empty-tip">
@@ -216,6 +223,26 @@ function openBatch(row) {
 async function onBatchDownloaded() {
   await load()
   if (batchTaskId.value) await refreshBatches(batchTaskId.value)
+}
+
+async function downloadBatchConfig(b) {
+  const taskId = b.task_id
+  const batchId = b.batch_id
+  if (!taskId || !batchId) return ElMessage.error('批次信息缺失')
+  try {
+    const res = await apiFetch(`/tasks/${taskId}/batches/${batchId}/config`)
+    if (!res?.success) return ElMessage.error(res?.detail || '获取配置失败')
+    const cfg = res.data
+    const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `task_${cfg.task_name || taskId}_${batchId}.json`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
+    ElMessage.success('配置已下载，可用 local_webchat_runner.py --config 该文件 重跑')
+  } catch (e) {
+    ElMessage.error(`下载失败: ${e.message || e}`)
+  }
 }
 
 function openImport(row) {

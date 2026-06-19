@@ -58,6 +58,16 @@ async def create_batch(task_id: str, req: models.BatchCreate, user=Depends(requi
             "message": f"已生成批次配置（{len(req.model_keys)} 模型）"}
 
 
+@router.get("/{task_id}/batches/{batch_id}/config")
+async def get_batch_config(task_id: str, batch_id: str):
+    """取某批次已持久化的 v2 配置，供前端重新下载（重下/重跑）。"""
+    try:
+        config = await task_service.get_batch_config(task_id, batch_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"success": True, "data": config}
+
+
 @router.post("/{task_id}/import-results")
 async def import_results(task_id: str, file: UploadFile = File(...),
                          user=Depends(require_admin)):

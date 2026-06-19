@@ -43,12 +43,15 @@
                     <span style="font-family:monospace;font-size:12px">{{ b.batch_id }}</span>
                   </template>
                 </el-table-column>
-                <el-table-column label="模型 × 题区间" min-width="260">
+                <el-table-column label="模型 × 已选题号" min-width="340">
                   <template #default="{ row: b }">
-                    <div v-for="mk in (b.model_keys || [])" :key="mk" style="line-height:1.8">
+                    <div v-for="mk in batchModels(b)" :key="mk" class="model-qids">
                       <el-tag size="small">{{ mk }}</el-tag>
-                      <span style="font-size:12px;color:#666;margin-left:6px">{{ fmtModelRange(b, mk) }}</span>
+                      <span class="qid-list" :title="modelQids(b, mk).join(', ')">
+                        {{ modelQidsText(b, mk) }}
+                      </span>
                     </div>
+                    <span v-if="!batchModels(b).length" style="color:#bbb;font-size:12px">—</span>
                   </template>
                 </el-table-column>
                 <el-table-column label="题数" width="70">
@@ -269,10 +272,44 @@ function fmtRange(qids) {
   if (contiguous) return `${pad(nums[0])} ~ ${pad(nums[nums.length - 1])} (${nums.length}题)`
   return `${pad(nums[0])} 等 ${nums.length} 题`
 }
+// 取某批次的模型列表（优先 v2 config.units，回退 model_keys）
+function batchModels(b) {
+  const units = b.config && b.config.units
+  if (units && units.length) return units.map(u => u.model_key)
+  return b.model_keys || []
+}
+// 取某批次某模型已选的具体题号（v2 config.units > per_model_question_ids > 整批 question_ids 兜底）
+function modelQids(b, mk) {
+  const cfg = b.config || {}
+  const units = cfg.units || []
+  const u = units.find(x => x.model_key === mk)
+  if (u && u.question_ids && u.question_ids.length) return u.question_ids
+  const pm = cfg.per_model_question_ids
+  if (pm && pm[mk] && pm[mk].length) return pm[mk]
+  return b.question_ids || []
+}
+// 题号展示：尽量合并成区间，否则枚举前几个+省略
+function modelQidsText(b, mk) {
+  const qids = modelQids(b, mk)
+  if (!qids.length) return '(未选题)'
+  const nums = qids.map(qnum).filter(n => !isNaN(n)).sort((a, b) => a - b)
+  if (!nums.length) return qids.length + ' 题'
+  // 合并连续区间
+  const parts = []
+  let start = nums[0], prev = nums[0]
+  for (let i = 1; i < nums.length; i++) {
+    if (nums[i] === prev + 1) { prev = nums[i]; continue }
+    parts.push(start === prev ? `${start}` : `${start}-${prev}`)
+    start = nums[i]; prev = nums[i]
+  }
+  parts.push(start === prev ? `${start}` : `${start}-${prev}`)
+  let txt = parts.join(',')
+  if (txt.length > 42) txt = txt.slice(0, 42) + `… (+${nums.length}题)`
+  else txt += ` (${nums.length}题)`
+  return txt
+}
 function fmtModelRange(b, mk) {
-  const pm = b.config && b.config.per_model_question_ids
-  const qids = (pm && pm[mk]) || b.question_ids || []
-  return fmtRange(qids)
+  return fmtRange(modelQids(b, mk))
 }
 function batchTagType(status) {
   if (status === 'completed') return 'success'
@@ -322,4 +359,6 @@ onMounted(async () => { await load() })
 .expand-box { padding: 8px 16px 16px 48px; }
 .expand-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .empty-tip { color: #bbb; font-size: 13px; padding: 12px 0; }
+.model-qids { display: flex; align-items: baseline; gap: 6px; line-height: 1.7; }
+.model-qids .qid-list { font-size: 12px; color: #555; word-break: break-all; }
 </style>

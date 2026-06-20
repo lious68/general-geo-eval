@@ -935,6 +935,27 @@ class ErnieWebChatClient(WebChatClientBase):
         "[class*='联网']"
     )
 
+    async def _is_logged_in(self, page: Page, timeout: int = 15) -> bool:
+        """文心一言真实登录态探测（覆盖基类"输入框可见"弱信号）。
+
+        文心首页 (yiyan.baidu.com) 的输入框匿名态就可见——基类判据会把匿名/登录中途
+        误判成已登录 → _login_flow 抢救保存只有匿名 cookie 的半成品 state → 下次评测
+        一加载就被踢回登录页（"每次要重新登录"根因）。
+
+        强信号 = BDUSS cookie：百度通行证 httpOnly 登录凭证，仅完整登录后下发。
+        证据：diag_ernie_login_state.py 登录翻转 [2]→[5]：登录前只有匿名态 cookie
+        （BAIDUID/RT/ab_sr…，无 BDUSS）；登录后 BDUSS+STOKEN+PTOKEN+UBI 写入。
+        BDUSS 是 httpOnly → document.cookie 读不到，必须用 context.cookies()。
+        """
+        url = page.url or ""
+        if any(h in url for h in self.LOGIN_URL_HINTS):
+            return False
+        try:
+            cookies = await page.context.cookies()
+            return any(c.get("name") == "BDUSS" and c.get("value") for c in cookies)
+        except Exception:
+            return False
+
     async def _navigate_to_chat(self, page: Page):
         """导航到文心一言"""
         await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
@@ -962,8 +983,14 @@ class ErnieWebChatClient(WebChatClientBase):
     async def _wait_for_response(self, page: Page, timeout: int = 180):
         """等待文心一言响应完成
 
-        文心一言有"深度思考"模式，会先输出思考过程再输出最终答案。
-        等待策略：先等 answerBox 出现 → 等深度思考完成 → 等文本稳定
+        文心一言有"深度思考"模式：先流式输出"正在思考中"+思维链（可见但非最终答案），
+        再出最终答案。完成判定按 answerBox 正文内容——不再依赖 CSS 选择器（文心类名
+        哈希化如 editable__T7WAW4uW，[class*='thinking'] 匹配不到 → is_visible 直接
+        False → 旧逻辑跳过等待思考结束）。
+
+        证据：output/webchat_task3_20260620_222419.json 的 q17/q18 在思考停顿期
+        被 _wait_for_text_stability 误判稳定、提前返回半截"正在思考中...买到高"。
+        策略：先轮询直到正文不再含进行中标记 → 再做文本稳定性确认（最终答案稳定）。
         """
         # 等待回答区域出现
         try:
@@ -972,19 +999,47 @@ class ErnieWebChatClient(WebChatClientBase):
         except Exception:
             await asyncio.sleep(10)
 
-        # 等待深度思考完成：思考中会显示"深度思考中..."之类的指示器
-        try:
-            thinking_el = page.locator("[class*='thinking'], [class*='loading']").first
-            if await thinking_el.is_visible(timeout=5000):
-                await thinking_el.wait_for(state="hidden", timeout=120000)
-                logger.info(f"WebChat ernie: deep thinking completed")
-        except Exception:
-            pass
+        # ── 阶段1：等深度思考结束（内容判定，不靠 CSS 选择器）──
+        # 进行中标记：思考中/搜索中/生成中等。正文含任一即继续等。
+        # 这些是 UI 渲染在 answerBox 里的可见提示，不是最终答案的一部分。
+        await self._wait_until_no_progress_markers(page, timeout=timeout)
 
-        # 等文本稳定（文心思考模式较慢，给更长的稳定等待时间）
+        # ── 阶段2：最终答案文本稳定（思考结束后答案仍在流式增长，需等其稳定）──
         await self._wait_for_text_stability(
             page, "[class*='answerBox'], [class*='answer']", timeout=timeout
         )
+
+    async def _wait_until_no_progress_markers(self, page: Page, timeout: int = 180,
+                                               interval: int = 2) -> bool:
+        """轮询 answerBox 正文，直到不含"进行中"标记（正在思考中/搜索中/生成中...）。
+
+        思考阶段正文会反复出现这些标记；标记全部消失后才进入最终答案阶段。
+        单独成阶段：思考停顿期文本长度可能暂时不变（_wait_for_text_stability 会误判），
+        但标记仍在 → 此处继续等，堵住"思考停顿误判稳定"。
+        返回 True=已进入无标记阶段，False=超时。
+        """
+        marker_js = (
+            "(sel) => {"
+            "  const els = document.querySelectorAll(sel);"
+            "  if (!els.length) return '';"
+            "  return (els[els.length - 1]?.innerText || '');"
+            "}"
+        )
+        selector = "[class*='answerBox'], [class*='answer']"
+        markers = ("正在思考", "思考中", "搜索中", "生成中", "正在搜索", "正在生成")
+        elapsed = 0
+        while elapsed < timeout:
+            try:
+                text = await page.evaluate(marker_js, selector) or ""
+            except Exception:
+                text = ""
+            if text and not any(m in text for m in markers):
+                logger.info(f"WebChat {self.model_key}: thinking ended (no progress markers, {len(text)} chars)")
+                return True
+            await asyncio.sleep(interval)
+            elapsed += interval
+        logger.warning(f"WebChat {self.model_key}: still has progress markers after {timeout}s")
+        return False
 
     async def _extract_response(self, page: Page) -> str:
         """提取文心一言响应文本

@@ -68,7 +68,7 @@ from database import get_questions as db_get_questions
 from scheduler import EvalScheduler
 from task_units import SqliteUnitStore
 from webchat_policy import get_model_policy
-from web_chat_auth import has_auth_state
+from web_chat_auth import has_auth_state, save_auth_state
 
 
 def _analysis_to_dict(a) -> Dict:
@@ -226,6 +226,44 @@ def _write_json(path: str, data: Dict) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+async def _login_flow(client, mk: str, max_wait: int = 300) -> bool:
+    """--headed 下引导登录：确保浏览器开着 → 导航一次 → 轮询 _is_logged_in → 确认后才保存。
+
+    只在 _is_logged_in 确认登录后调 save_auth_state，杜绝提前保存不完整 state。
+    导航只做一次（_goto_site），轮询时不重复 goto（否则会打断用户正在进行的登录）。
+    返回是否最终登录成功。
+    """
+    # 确保浏览器开着（无存档时 initialize(fresh=True) 开全新 context）
+    if client._page is None:
+        if not await client.initialize(fresh=True):
+            print(f"  ❌ {client.name} 无法启动浏览器，跳过登录")
+            return False
+    # 导航到站点一次；之后只探测、不重新 goto
+    await client._goto_site(client._page)
+    name = client.name
+    print(f"\n  → 请在浏览器窗口登录 {name}（{client.url}）")
+    print(f"    登录完成后会自动检测并保存，无需手动按 Enter。")
+    elapsed = 0
+    while elapsed < max_wait:
+        await asyncio.sleep(3)
+        elapsed += 3
+        try:
+            if await client._is_logged_in(client._page, timeout=5):
+                try:
+                    state = await client._context.storage_state()
+                    save_auth_state(mk, state)
+                    print(f"  ✅ {name} 登录已检测并保存（{len(state.get('cookies', []))} cookies）")
+                    return True
+                except Exception as e:
+                    print(f"  ❌ {name} 保存登录态失败: {e}")
+                    return False
+        except Exception as e:
+            print(f"    ⚠️ {name} 探测异常（继续等待）: {e}")
+        print(f"    ... 等待 {name} 登录（{max_wait - elapsed}s）")
+    print(f"  ⚠️ {max_wait}s 未检测到 {name} 登录，不保存、跳过该模型")
+    return False
+
+
 async def run_local_eval(
     model_keys: List[str],
     question_ids: Optional[List[str]] = None,
@@ -281,32 +319,42 @@ async def run_local_eval(
         return
     print(f"  加载 {len(questions)} 个问题")
 
-    # ── 登录预检：--headed 下，无登录态的模型先弹浏览器让用户登录 ──
-    # 有登录态 → 直接进调度（--headed 下浏览器可见，能看到执行）
-    # 无登录态 + --headed → 弹浏览器引导登录、保存后继续
-    # 无登录态 + headless → 无法登录，跳过；全部无态则中止、不产出空结果
-    missing_auth = [mk for mk in model_keys if not has_auth_state(mk)]
-    if missing_auth:
-        if headed:
-            from setup_webchat_auth import setup_auth
-            print(f"\n[登录预检] 以下模型无登录态: {', '.join(missing_auth)}")
-            print(f"  将依次打开浏览器，请在弹出的窗口中登录对应模型，登录完成后回到终端按 Enter 保存。")
-            for mk in missing_auth:
-                print(f"\n  → 开始登录 {mk} ...")
-                try:
-                    await setup_auth(mk)
-                except Exception as e:
-                    print(f"  ❌ {mk} 登录流程异常: {e}")
-            still_missing = [mk for mk in model_keys if not has_auth_state(mk)]
-            if still_missing:
-                print(f"\n  ⚠️ 以下模型仍无登录态，将被跳过: {', '.join(still_missing)}")
-        else:
-            print(f"\n[登录预检] 以下模型无登录态，且非 --headed 模式无法弹浏览器登录，将被跳过: {', '.join(missing_auth)}")
-            print(f"  （如需登录请加 --headed 参数，或先运行 python scripts/setup_webchat_auth.py <model>）")
+    # ── 登录预检：对每个模型真实探测"能不能聊天"；没登录则 --headed 引导登录后保存 ──
+    # 用真实 DOM 探测（输入框可见 + 非登录页 URL），取代旧的 has_auth_state（文件存在）
+    # 和手动按 Enter；杜绝"提前保存不完整 state"和"跑到一半才挂"。
+    print("\n[登录预检] 逐模型探测登录态...")
+    not_logged_in: List[str] = []
+    for mk in model_keys:
+        client = create_web_chat_client(mk)
+        logged_in = False
+        try:
+            if client.is_configured and await client.initialize():
+                await client._goto_site(client._page)
+                logged_in = await client._is_logged_in(client._page)
+            if not logged_in:
+                print(f"  {mk}: 未登录" + ("" if client.is_configured else "（无存档）"))
+                if headed:
+                    logged_in = await _login_flow(client, mk)
+            if not logged_in:
+                not_logged_in.append(mk)
+            else:
+                print(f"  {mk}: 已登录 ✓")
+        except Exception as e:
+            print(f"  {mk}: 探测异常 {e}，按未登录处理")
+            not_logged_in.append(mk)
+        finally:
+            await client.close()
 
-    # 全部模型无登录态 → 中止，不产出空结果（避免空结果污染任务）
-    if all(not has_auth_state(mk) for mk in model_keys):
-        print("\n❌ 所有模型均无登录态，已中止，未生成结果文件。")
+    if not_logged_in:
+        if headed:
+            print(f"\n  ⚠️ 以下模型未登录成功，将被跳过: {', '.join(not_logged_in)}")
+        else:
+            print(f"\n  ⚠️ 以下模型未登录，且非 --headed 无法弹浏览器登录，将被跳过: {', '.join(not_logged_in)}")
+            print(f"  （加 --headed 可弹浏览器登录）")
+
+    # 全部模型未登录 → 中止，不产出空结果
+    if all(mk in not_logged_in for mk in model_keys):
+        print("\n❌ 所有模型均未登录，已中止，未生成结果文件。")
         print("   请用 --headed 模式运行以弹出浏览器登录，或先运行 setup_webchat_auth.py。")
         return
 

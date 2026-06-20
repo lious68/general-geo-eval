@@ -36,6 +36,9 @@ class WebChatClientBase:
     url: str = ""
     is_configured: bool = False
 
+    # 登录页 URL 片段（命中任一即视为未登录/登录页，_is_logged_in 反向信号）
+    LOGIN_URL_HINTS = ("login", "passport", "signin", "sso")
+
     def __init__(self, model_key: str):
         self.model_key = model_key
         site = WEBCHAT_SITES.get(model_key, {})
@@ -52,14 +55,18 @@ class WebChatClientBase:
         self._context = None
         self._page = None
 
-    async def initialize(self):
+    async def initialize(self, fresh: bool = False) -> bool:
         """启动浏览器（在评测开始时调用一次）
+
+        fresh=False（默认，评测用）：无认证状态返回 False；用已存 storage_state 开浏览器。
+        fresh=True（登录流程用）：不要求认证状态，开全新 context（不传 storage_state），
+            供 _login_flow 引导用户登录后探测保存。
 
         豆包等网站检测 Playwright 自动化浏览器，需要在有 X 显示的环境下
         使用 headless=False（配合 xvfb-run）才能绕过反爬检测。
         服务器上 systemd 服务需用 xvfb-run 启动 uvicorn。
         """
-        if not self.is_configured:
+        if not fresh and not self.is_configured:
             logger.warning(f"WebChat {self.model_key}: 无认证状态，无法评测")
             return False
 
@@ -99,9 +106,9 @@ class WebChatClientBase:
         """
 
         self._context = await self._browser.new_context(
-            storage_state=self._auth_state,
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            **({"storage_state": self._auth_state} if (not fresh and self._auth_state) else {}),
         )
         # 在每个页面创建前注入反检测脚本
         await self._context.add_init_script(stealth_js)
@@ -201,6 +208,36 @@ class WebChatClientBase:
             self._playwright = None
             self._page = None
             self._context = None
+
+    async def _goto_site(self, page: Page) -> None:
+        """导航到站点首页一次（探测/登录前由调用方调用）。
+
+        失败静默：导航失败时由 _is_logged_in 的输入框可见性兜底判 False。
+        只导航一次，不在 _is_logged_in 内重复 goto（否则会打断用户正在进行的登录）。
+        """
+        try:
+            await page.goto(self.url, wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            try:
+                await page.goto(self.url, wait_until="commit", timeout=30000)
+            except Exception:
+                pass
+
+    async def _is_logged_in(self, page: Page, timeout: int = 15) -> bool:
+        """真实登录态探测（只看当前页，不导航）。
+
+        URL 含登录页片段 → False；否则看聊天输入框是否可见。
+        不导航：登录轮询时每 3s 调用，重复 goto 会打断用户登录。
+        子类可覆盖以提供更精确信号（默认用 INPUT_SELECTOR 可见性 + URL 反向信号）。
+        """
+        url = page.url or ""
+        if any(h in url for h in self.LOGIN_URL_HINTS):
+            return False
+        try:
+            loc = page.locator(self.INPUT_SELECTOR).first
+            return await loc.is_visible(timeout=timeout * 1000)
+        except Exception:
+            return False
 
     # ── 子类需要实现的方法 ──
 

@@ -1,6 +1,6 @@
 <template>
   <div class="questions">
-    <h2 class="page-title">📝 问题管理</h2>
+    <h2 class="page-title"><el-icon><Document /></el-icon> 问题管理</h2>
     <el-card>
       <div style="margin-bottom:16px;display:flex;justify-content:space-between">
         <div>
@@ -132,5 +132,5 @@ onMounted(loadQuestions)
 </script>
 
 <style scoped>
-.page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
+.page-title { font-size: var(--fs-page-title); margin-bottom: 20px; color: var(--color-text); display: flex; align-items: center; gap: 8px; }
 </style>

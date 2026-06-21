@@ -133,7 +133,7 @@
         <el-dialog v-model="drilldownVisible" :title="drilldownTitle" width="820px" top="6vh">
           <div v-if="drilldownLoading" style="text-align:center;padding:30px">
             <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-            <p style="color:#64748b;margin-top:10px">正在加载...</p>
+            <p style="color:var(--color-text-sec);margin-top:10px">正在加载...</p>
           </div>
           <template v-else>
             <el-collapse v-for="(data, mk) in drilldownData" :key="mk">
@@ -314,8 +314,7 @@ function initDateRange() {
 }
 
 function sourceLabel(src) {
-  const icon = src.kind === 'task' ? '🅣' : (src.mode === 'webchat' ? '🌐' : '🔗')
-  return `${icon} ${src.name} (${src.date})`
+  return `${src.name} (${src.date})`
 }
 
 function onSourceChange(id) {

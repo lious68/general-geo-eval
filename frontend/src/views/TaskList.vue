@@ -46,7 +46,7 @@
                     <div class="batch-results-box">
                       <div v-if="batchResultsLoading[b.batch_id]" class="batch-results-tip">加载中…</div>
                       <div v-else-if="!(batchResultsOf(b.batch_id) || []).length" class="batch-results-tip">
-                        暂无导入结果，点该批次「📥 导入」上传本地 runner 产出的 JSON
+                        暂无导入结果，点该批次「导入」上传本地 runner 产出的 JSON
                       </div>
                       <div v-else>
                         <div class="batch-results-head">

@@ -59,7 +59,7 @@
         <template v-else>
           <span>评测时间：</span>
           <el-tag size="small" type="info">{{ formatRunTime(latestRun.completed_at || latestRun.started_at) }}</el-tag>
-          <el-tag v-if="latestRun.mode === 'webchat'" size="small" type="warning" style="margin-left:4px">🌐 WebChat</el-tag>
+          <el-tag v-if="latestRun.mode === 'webchat'" size="small" type="warning" style="margin-left:4px"><el-icon><Monitor /></el-icon> WebChat</el-tag>
           <el-button v-if="route.query.run_id" size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
         </template>
       </div>
@@ -326,7 +326,7 @@
                     </div>
                   </template>
                   <div class="expand-text" v-else style="color:#999">（无回答内容）</div>
-                  <div v-if="row.error_message" class="expand-error">⚠️ 错误: {{ row.error_message }}</div>
+                  <div v-if="row.error_message" class="expand-error"><el-icon><WarningFilled /></el-icon> 错误: {{ row.error_message }}</div>
                 </div>
               </template>
             </el-table-column>
@@ -848,5 +848,5 @@ onMounted(loadData)
   border: 1px solid #ebeef5; margin-top: 6px;
   max-height: 500px; overflow-y: auto;
 }
-.expand-error { color: #f56c6c; font-size: 12px; margin-top: 6px; }
+.expand-error { color: #f56c6c; font-size: 12px; margin-top: 6px; display: flex; align-items: center; gap: 4px; }
 </style>

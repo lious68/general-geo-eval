@@ -1,6 +1,6 @@
 <template>
   <div class="settings">
-    <h2 class="page-title">⚙️ 系统设置</h2>
+    <h2 class="page-title"><el-icon><Setting /></el-icon> 系统设置</h2>
 
     <!-- 查看者提示 -->
     <el-card v-if="!isAdmin()" style="margin-bottom:20px">
@@ -9,7 +9,7 @@
 
     <!-- ModelVerse 一键配置 -->
     <el-card v-if="isAdmin()" style="margin-bottom:20px">
-      <template #header><strong>🚀 ModelVerse 中转平台（推荐）</strong></template>
+      <template #header><strong><el-icon><Promotion /></el-icon> ModelVerse 中转平台（推荐）</strong></template>
       <el-alert type="info" :closable="false" style="margin-bottom:16px">
         使用 ModelVerse 中转平台，一个 API Key 访问全部 5 个模型，无需单独配置各厂商 API Key
       </el-alert>
@@ -30,7 +30,7 @@
     <!-- 模型API Key配置 -->
     <el-card v-if="isAdmin()" style="margin-bottom:20px">
       <template #header>
-        <strong>🔑 模型 API Key 配置</strong>
+        <strong><el-icon><Key /></el-icon> 模型 API Key 配置</strong>
         <el-tag v-if="useModelverse" type="warning" style="margin-left:12px" size="small">当前使用 ModelVerse 中转</el-tag>
       </template>
       <el-table :data="models" stripe>
@@ -64,7 +64,7 @@
 
     <!-- 评分权重 -->
     <el-card v-if="isAdmin()" style="margin-bottom:20px">
-      <template #header><strong>⚖️ 评分权重配置</strong></template>
+      <template #header><strong><el-icon><Histogram /></el-icon> 评分权重配置</strong></template>
       <el-form label-width="120px">
         <el-form-item v-for="(label, key) in weightLabels" :key="key" :label="label">
           <el-slider v-model="weights[key]" :min="0" :max="1" :step="0.05" show-input />
@@ -79,7 +79,7 @@
     <el-card v-if="isAdmin()" style="margin-bottom:20px">
       <template #header>
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <strong>👥 用户管理</strong>
+          <strong><el-icon><User /></el-icon> 用户管理</strong>
           <el-button type="primary" size="small" @click="showAddUserDialog = true">添加用户</el-button>
         </div>
       </template>
@@ -252,5 +252,5 @@ onMounted(() => { loadModels(); loadWeights(); if (isAdmin()) loadUsers() })
 </script>
 
 <style scoped>
-.page-title { font-size: 22px; margin-bottom: 20px; color: #1a1a2e; }
+.page-title { font-size: var(--fs-page-title); margin-bottom: 20px; color: var(--color-text); display: flex; align-items: center; gap: 8px; }
 </style>

@@ -32,8 +32,17 @@ def _has_effective_citation(result: AnalysisResult) -> bool:
     """判断是否有有效引用（与 database.py 口径一致）
 
     有效引用 = UCloud官方引用 OR (回答提及UCloud时的第三方来源引用)
+
+    官方引用：citations 或 all_cited_urls 中任一 is_ucloud 即计入。
+    必须同时扫 all_cited_urls —— analyzer 对【子域名】UCloud 官方 URL
+    （astraflow.ucloud.cn / docs.ucloud.cn / www-waf.ucloud.cn 等）只放进
+    all_cited_urls（url_patterns 仅匹配 ucloud.cn / ucloud.com / ucloudstack.com
+    根域，子域名进不了 citations），只扫 citations 会漏判这类官方引用。
     """
     for c in result.citations:
+        if c.is_ucloud:
+            return True
+    for c in result.all_cited_urls:
         if c.is_ucloud:
             return True
     # 第三方来源引用：回答提及了 UCloud 且有第三方域名引用

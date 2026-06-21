@@ -60,7 +60,7 @@ def main():
     cfgB = r.json()["data"]
     payloadB = {"meta": {"task_id": task_id, "batch_id": cfgB["batch_id"], "run_id": cfgB["run_id"]},
                 "questions": [],
-                "analysis_results": {"kimi": [_mk("Q1", "kimi", mentioned=False),
+                "analysis_results": {"kimi": [_mk("Q1", "kimi", mentioned=True),
                                               _mk("Q2", "kimi", mentioned=True)]}}
     r = client.post(f"/api/tasks/{task_id}/batches/{cfgB['batch_id']}/import-results",
                     files={"file": ("b.json", json.dumps(payloadB).encode(), "application/json")})
@@ -81,6 +81,16 @@ def main():
     assert q1["metrics"]["coverage"]["value"] == "-", q1["metrics"]["coverage"]["value"]
     # raw_content 透传
     assert "UCloud" in q1["response_content"], q1["response_content"]
+    # 原始标志字段（供前端标签展示，与批次视图一致）：
+    # Q1 是引导型 → metrics.coverage.numerator 被强制 0，但 ucloud_mentioned 仍为 True，
+    # 标签得用原始字段才能在引导型题上正确显示"提及"。
+    assert q1["ucloud_mentioned"] is True, "Q1 原始 ucloud_mentioned 应为 True"
+    assert q1["ucloud_recommended"] is True, "Q1 原始 ucloud_recommended 应为 True"
+    assert q1["citation_count"] == 0, "Q1 citation_count 应为 0"
+    assert q1["has_citation"] is False, "Q1 has_citation 应为 False"
+    # 关键：引导型题 metrics.coverage.numerator=0（强制），但原始 ucloud_mentioned=True
+    assert q1["metrics"]["coverage"]["numerator"] == 0, "引导型题 coverage.numerator 应被强制 0"
+    assert q1["ucloud_mentioned"] is True, "引导型题原始 ucloud_mentioned 仍应为 True（标签用此）"
 
     # task 模式不校验 run 存在性：run_id=0 不报 404
     assert r.status_code == 200

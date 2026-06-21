@@ -459,6 +459,13 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
             "mention_count": r.get("ucloud_mention_count", 0),
             "position_weight": r.get("position_weight", 0),
             "ucloud_rank": r.get("ucloud_rank"),
+            # 原始标志字段：供前端标签展示（提及/推荐/引用N），与批次结果视图一致。
+            # 引导型/非自然题的 metrics.*.numerator 被强制为 0，标签必须用原始字段
+            # 才能在引导型题上正确显示"提及"等。
+            "ucloud_mentioned": bool(r.get("ucloud_mentioned")),
+            "ucloud_recommended": bool(r.get("ucloud_recommended")),
+            "citation_count": r.get("citation_count", 0) or 0,
+            "has_citation": bool(db.has_effective_citation(r)),
             "response_summary": summary,
             "response_content": response_content,
             "has_error": has_error,

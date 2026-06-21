@@ -301,6 +301,13 @@
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div class="expand-content">
+                  <div class="expand-tags">
+                    <el-tag v-if="row.ucloud_mentioned" size="small" type="success">提及</el-tag>
+                    <el-tag v-if="row.ucloud_recommended" size="small" type="success">推荐</el-tag>
+                    <el-tag v-if="row.has_citation" size="small" type="warning">引用{{ row.citation_count || '' }}</el-tag>
+                    <el-tag v-if="row.ucloud_rank" size="small">排名#{{ row.ucloud_rank }}</el-tag>
+                    <el-tag size="small" effect="plain">情感{{ row.metrics.sentiment.label }}({{ row.metrics.sentiment.score.toFixed(2) }})</el-tag>
+                  </div>
                   <div class="expand-label">题目：</div>
                   <div class="expand-text">{{ row.question_text }}</div>
                   <div class="expand-label" style="margin-top:8px">AI 回答：</div>
@@ -820,6 +827,7 @@ onMounted(loadData)
 .val-na { color: #b0b0b0; font-style: italic; }
 .val-neutral { color: #e6a23c; }
 .expand-content { padding: 8px 16px; background: #fafafa; }
+.expand-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .expand-label { font-size: 12px; color: #909399; margin-bottom: 2px; }
 .expand-text { font-size: 13px; color: #333; line-height: 1.6; white-space: pre-wrap; }
 .full-answer { max-height: none; overflow: visible; }

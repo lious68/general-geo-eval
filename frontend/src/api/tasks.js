@@ -55,3 +55,11 @@ export function getTaskDetails(taskId, modelKey = null) {
   const q = modelKey ? `?model_key=${encodeURIComponent(modelKey)}` : ''
   return apiFetch(`/tasks/${taskId}/details${q}`)
 }
+
+export function recalculateTaskScores(taskId) {
+  return apiFetch(`/tasks/${taskId}/recalculate`, { method: 'POST' })
+}
+
+export function recalculateAllTaskScores() {
+  return apiFetch('/tasks/recalculate-all', { method: 'POST' })
+}

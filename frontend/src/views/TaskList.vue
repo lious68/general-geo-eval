@@ -5,9 +5,14 @@
     <el-card>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <span style="font-weight:600">任务列表（点行首 ▸ 展开看批次 / 子任务）</span>
-        <el-button v-if="isAdmin()" type="primary" @click="openWizard">
-          <el-icon><Plus /></el-icon> 新建任务
-        </el-button>
+        <div>
+          <el-button v-if="isAdmin()" type="warning" plain :loading="recalculating" @click="onRecalcAll">
+            🔄 重算全部评分
+          </el-button>
+          <el-button v-if="isAdmin()" type="primary" @click="openWizard">
+            <el-icon><Plus /></el-icon> 新建任务
+          </el-button>
+        </div>
       </div>
       <el-alert type="info" :closable="false" style="margin-bottom:12px">
         一个任务 = 固定总题集。展开任务行即可看到其下<b>批次（子任务）</b>，每个批次 = 一个模型+题区间的下载配置。
@@ -206,7 +211,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
-import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs } from '../api/tasks'
+import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores } from '../api/tasks'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const router = useRouter()
@@ -215,6 +220,7 @@ const loading = ref(false)
 const wizard = ref(false)
 const form = ref({ name: 'GEO评估' })
 const creating = ref(false)
+const recalculating = ref(false)
 
 // 批次（子任务）懒加载
 const batchesMap = ref({})
@@ -473,6 +479,21 @@ async function onDel(row) {
   } catch (e) {
     ElMessage.error(`删除失败: ${e.message || e}`)
   }
+}
+
+async function onRecalcAll() {
+  await ElMessageBox.confirm(
+    '将按当前已导入结果重算全部任务的 GEO 评分（提及率/引用率/TOP3推荐率等）。用于评分口径修复后刷新历史数据。继续？',
+    '重算全部评分', { type: 'warning' })
+  recalculating.value = true
+  try {
+    const res = await recalculateAllTaskScores()
+    if (!res?.success) return ElMessage.error(res?.detail || '重算失败')
+    ElMessage.success(res.message || '重算完成')
+    await load()
+  } catch (e) {
+    ElMessage.error(`重算失败: ${e.message || e}`)
+  } finally { recalculating.value = false }
 }
 
 onMounted(async () => { await load() })

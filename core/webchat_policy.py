@@ -31,20 +31,20 @@ from typing import Dict
 _DEFAULT_POLICY = {
     "max_attempts": 3,
     "inter_unit_delay": 8.0,
-    "max_consecutive": 25,      # 默认贴近阈值但留余量
-    "burst_cooldown": 180,
-    "rate_max": 30,
+    "max_consecutive": 20,      # 用户要求：每模型满20题休息
+    "burst_cooldown": 3600,     # 休息1小时
+    "rate_max": 20,             # 每小时上限同步收紧
     "rate_window_sec": 3600,
     "ban_cooldown_sec": 900,
 }
 
-# 敏感平台逐个收紧
+# DeepSeek 更敏感：满15题即触发（比20更早、更保守），但休息时长统一1小时。
 _MODEL_OVERRIDES: Dict[str, dict] = {
     "deepseek": {
         "max_attempts": 4,
         "inter_unit_delay": 15.0,
         "max_consecutive": 15,   # 远低于 25 阈值
-        "burst_cooldown": 300,
+        "burst_cooldown": 3600,  # 统一休息1小时
         "rate_max": 20,          # 每小时上限
         "rate_window_sec": 3600,
         "ban_cooldown_sec": 1800,

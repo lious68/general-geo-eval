@@ -193,3 +193,43 @@ python scripts/local_webchat_runner.py --resume 20260617_103022_a1b2c3 --headed
 
 DeepSeek 等敏感平台的限流参数在 `core/webchat_policy.py` 的 `_MODEL_OVERRIDES`。若实测仍触发风控，进一步调小 `max_consecutive` / `rate_max`，或调大 `burst_cooldown` / `ban_cooldown_sec`。
 
+
+## 云上自动化模式（服务器推送 + Win 守护进程）
+
+部署后可省去手动下配置 / 敲命令 / 传结果三步。整体链路：
+
+```
+Linux 后端建批次 → webhook 推 Win 守护进程
+   → Win 探登录态 → 弹通知 → 你 RDP 上 Win 开 http://localhost:8443 点[开始]
+   → 守护进程自动调 local_webchat_runner --headed 跑（每模型满20题休息1小时）
+   → 跑完自动回传 import-results → Dashboard 出分
+```
+
+### Windows 守护进程安装
+
+1. RDP 上 Win 机器，确保已装 Python 3.11 + 项目依赖（`requirements.txt` + `scripts/win_requirements.txt`）+ Playwright 浏览器。
+2. 复制 `scripts/win_daemon.env.example` → `scripts/win_daemon.env`，填 `BACKEND_URL`/`SERVICE_PASSWORD`/`WEBHOOK_SECRET`（与后端 `.env` 一致）。
+3. 装 [NSSM](https://nssm.cc/) 并放 PATH。
+4. 管理员权限运行 `scripts\install_win_daemon.bat`。
+5. 验证：浏览器开 `http://localhost:8443` 见确认页；`nssm status WinDaemon` 为 RUNNING。
+
+### Linux 后端配置
+
+`.env` 加两项（与 Win 端对应）：
+
+```
+WEBHOOK_WIN_URL=http://<win内网IP>:8443
+WEBHOOK_SECRET=<与 Win 端一致>
+```
+
+### 日常使用
+
+1. 浏览器开 Linux 后端 → 建任务 + 添加批次 → 批次状态自动 `config_downloaded → pushed`。
+2. Win 守护进程收到推送 → 探登录态：全登录则确认页可点[开始]；有未登录则先在 Win 浏览器登录该模型。
+3. RDP 上 Win 开 `http://localhost:8443` → 点[开始] → runner 自动跑（headed，注意处理验证码）。
+4. Dashboard 每 15s 自动刷新批次状态（pushed/awaiting_human/running/importing/imported）。
+5. 推送丢失/Win 离线时，批次行点「重推」重新触发。
+
+### 断点续跑
+
+守护进程崩溃 / Win 重启后，启动时自动 `GET /api/batches/pending` 拉未完成批次入队续跑；runner 的 `output/<run_id>.partial.json` 保证已完成题不丢。

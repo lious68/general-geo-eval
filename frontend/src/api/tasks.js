@@ -42,6 +42,10 @@ export function getBatchResults(taskId, batchId) {
   return apiFetch(`/tasks/${taskId}/batches/${batchId}/results`)
 }
 
+export function repushBatch(taskId, batchId) {
+  return apiFetch(`/tasks/${taskId}/batches/${batchId}/repush`, { method: 'POST' })
+}
+
 export function getBatchImportLogs(taskId, batchId) {
   return apiFetch(`/tasks/${taskId}/batches/${batchId}/import-logs`)
 }

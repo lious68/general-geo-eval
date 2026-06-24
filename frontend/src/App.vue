@@ -7,9 +7,13 @@
     <el-aside width="220px" class="sidebar">
       <div class="logo">
         <el-icon class="logo-icon"><Aim /></el-icon>
-        <span class="logo-text">UCloud GEO</span>
+        <span class="logo-text">GEO 评估</span>
       </div>
       <el-menu :default-active="currentRoute" router class="sidebar-menu">
+        <el-menu-item index="/">
+          <el-icon><Aim /></el-icon>
+          <span>品牌设置</span>
+        </el-menu-item>
         <el-menu-item index="/dashboard">
           <el-icon><DataAnalysis /></el-icon>
           <span>仪表盘</span>

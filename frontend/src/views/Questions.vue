@@ -11,7 +11,12 @@
             <el-option v-for="t in typeList" :key="t" :label="t" :value="t" />
           </el-select>
         </div>
-        <el-button v-if="isAdmin()" type="primary" @click="openAddDialog"><el-icon><Plus /></el-icon> 新增问题</el-button>
+        <div>
+          <el-button v-if="isAdmin()" type="success" plain @click="openGenerateDialog">
+            <el-icon><MagicStick /></el-icon> AI 生成问题
+          </el-button>
+          <el-button v-if="isAdmin()" type="primary" @click="openAddDialog"><el-icon><Plus /></el-icon> 新增问题</el-button>
+        </div>
       </div>
 
       <el-table :data="filteredQuestions" stripe max-height="600">
@@ -53,6 +58,41 @@
         <el-button type="primary" @click="submitQ">{{ editingQ ? '保存' : '添加' }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- AI 生成问题对话框 -->
+    <el-dialog v-model="genDialog" title="AI 生成问题题集" width="520px">
+      <el-alert type="info" :closable="false" style="margin-bottom:12px">
+        根据品牌/公司/官网/行业，AI 按行业特性生成若干场景，<b>每个场景恰好 5 个示例问题</b>，
+        可含品牌词/公司名/产品型号。生成后<b>替换</b>当前题集（旧题软删除，可恢复）。
+      </el-alert>
+      <el-form :model="genForm" label-width="90px">
+        <el-form-item label="品牌名" required>
+          <el-input v-model="genForm.brand_name" placeholder="如 UCloud" />
+        </el-form-item>
+        <el-form-item label="公司名">
+          <el-input v-model="genForm.company_name" placeholder="如 优刻得（可选）" />
+        </el-form-item>
+        <el-form-item label="网站" required>
+          <el-input v-model="genForm.website" placeholder="如 https://www.ucloud.cn" />
+        </el-form-item>
+        <el-form-item label="行业" required>
+          <el-input v-model="genForm.industry" placeholder="如 云计算、新能源汽车" />
+        </el-form-item>
+        <el-form-item label="生成模型">
+          <el-select v-model="genForm.model_key" style="width:100%">
+            <el-option v-for="m in genModels" :key="m.key" :label="`${m.name}（${m.has_api_key ? '已配置' : '未配置Key'}）`" :value="m.key" :disabled="!m.has_api_key" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="场景数">
+          <el-input-number v-model="genForm.scenario_count" :min="0" :max="20" placeholder="0=AI自定" />
+          <span style="margin-left:8px;color:#999;font-size:12px">留空/0 表示由 AI 按行业自定（约 8~12 个场景）</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="genDialog = false">取消</el-button>
+        <el-button type="primary" :loading="generating" @click="doGenerate">生成并替换题集</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -68,6 +108,12 @@ const showDialog = ref(false)
 const editingQ = ref(null)
 const defaultForm = { id: '', category: '', question_type: '品类词', question: '', tags: [], difficulty: 'medium' }
 const formQ = ref({ ...defaultForm })
+
+// AI 生成问题
+const genDialog = ref(false)
+const generating = ref(false)
+const genModels = ref([])
+const genForm = ref({ brand_name: '', company_name: '', website: '', industry: '', model_key: 'deepseek', scenario_count: 0 })
 
 const categoryList = computed(() => [...new Set(questions.value.map(q => q.category))])
 const typeList = computed(() => [...new Set(questions.value.map(q => q.question_type))])
@@ -126,6 +172,57 @@ async function deleteQ(id) {
     ElMessage.success('已删除')
     await loadQuestions()
   } catch (e) { ElMessage.error(e.message) }
+}
+
+// ---- AI 生成问题 ----
+async function openGenerateDialog() {
+  // 用当前品牌档案预填，并加载可用模型
+  try {
+    const res = await apiFetch('/settings/brand-profile')
+    const d = res.data || {}
+    genForm.value = {
+      brand_name: d.brand_name || '',
+      company_name: d.company_name || '',
+      website: d.website || '',
+      industry: d.industry || '',
+      model_key: genForm.value.model_key || 'deepseek',
+      scenario_count: 0,
+    }
+  } catch (e) { /* ignore */ }
+  try {
+    const res = await apiFetch('/settings/models')
+    genModels.value = (res.data?.models || []).filter(m => m.has_api_key)
+    const all = res.data?.models || []
+    // 优先选已配置的，否则保留默认
+    if (!genModels.value.find(m => m.key === genForm.value.model_key)) {
+      genForm.value.model_key = (genModels.value[0] || all[0] || {}).key || 'deepseek'
+    }
+  } catch (e) { /* ignore */ }
+  if (!genModels.value.length) {
+    ElMessage.warning('没有已配置 API Key 的模型，请先在「系统设置」配置模型')
+  }
+  genDialog.value = true
+}
+
+async function doGenerate() {
+  if (!genForm.value.brand_name.trim() || !genForm.value.website.trim() || !genForm.value.industry.trim()) {
+    ElMessage.warning('品牌名、网站、行业均为必填')
+    return
+  }
+  generating.value = true
+  try {
+    const res = await apiFetch('/questions/generate', {
+      method: 'POST',
+      body: JSON.stringify(genForm.value),
+    })
+    ElMessage.success(res.message || '生成成功')
+    genDialog.value = false
+    await loadQuestions()
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    generating.value = false
+  }
 }
 
 onMounted(loadQuestions)

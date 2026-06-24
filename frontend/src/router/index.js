@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { getToken, removeToken, setRole, setUsername } from '../composables/useWebSocket'
 
 const routes = [
-  { path: '/', redirect: '/dashboard' },
+  { path: '/', name: 'Home', component: () => import('../views/Home.vue') },
   { path: '/login', name: 'Login', component: () => import('../views/Login.vue'), meta: { public: true } },
   { path: '/dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
   { path: '/evaluation', name: 'Evaluation', component: () => import('../views/Evaluation.vue') },

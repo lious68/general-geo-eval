@@ -2,12 +2,18 @@
 from fastapi import APIRouter, HTTPException, Depends
 from routers.auth import require_admin
 import json
+import os
+import sys
 import database as db
 import models
 
 QUESTION_TYPES = ["品牌词", "品类词", "对比词", "场景词"]
 
 router = APIRouter(prefix="/api/questions", tags=["questions"])
+
+# 问题生成服务
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "services"))
+from question_generator import generate_and_replace
 
 
 @router.get("")
@@ -76,3 +82,26 @@ async def import_questions(req: models.QuestionImport, user=Depends(require_admi
     for q in req.questions:
         await db.upsert_question(q.dict())
     return {"success": True, "data": {"imported": len(req.questions)}}
+
+
+@router.post("/generate")
+async def generate_questions(req: models.QuestionGenerate, user=Depends(require_admin)):
+    """AI 生成题集：根据品牌/公司/官网/行业，每场景恰好 5 题，替换当前激活题集。"""
+    try:
+        result = await generate_and_replace(
+            brand_name=req.brand_name,
+            company_name=req.company_name,
+            website=req.website,
+            industry=req.industry,
+            model_key=req.model_key,
+            scenario_count=req.scenario_count,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"生成失败: {e}")
+    return {
+        "success": True,
+        "data": result,
+        "message": f"已生成 {result['generated']} 道问题（{result['scenarios']} 个场景），已替换当前题集",
+    }

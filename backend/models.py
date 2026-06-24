@@ -83,6 +83,24 @@ class QuestionImport(BaseModel):
     questions: List[QuestionCreate]
 
 
+# ============ 品牌档案 ============
+
+class BrandProfileUpdate(BaseModel):
+    brand_name: str
+    company_name: str = ""
+    website: str = ""
+    industry: str = ""
+
+
+class QuestionGenerate(BaseModel):
+    brand_name: str
+    company_name: str = ""
+    website: str = ""
+    industry: str = ""
+    model_key: str = "deepseek"
+    scenario_count: Optional[int] = None
+
+
 # ============ 设置 ============
 
 class ModelConfigUpdate(BaseModel):

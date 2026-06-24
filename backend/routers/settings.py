@@ -9,6 +9,10 @@ import models
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
+# core 模块路径（品牌档案）
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+from brand_profile import derive_from_input, default_brand_profile
+
 # 原厂模型配置
 MODELS_CONFIG = {
     "deepseek": {"name": "DeepSeek", "base_url": "https://api.deepseek.com", "model": "deepseek-chat", "api_key_env": "DEEPSEEK_API_KEY", "has_search": False, "search_note": "官方API无内置联网"},
@@ -158,3 +162,32 @@ async def update_weights(req: models.WeightsUpdate, user=Depends(require_admin))
     """更新评分权重"""
     await db.set_setting("geo_weights", req.json())
     return {"success": True}
+
+
+# ============ 品牌档案 ============
+
+@router.get("/brand-profile")
+async def get_brand_profile():
+    """获取当前被测品牌档案（未设置时返回空 + UCloud 默认档案作参考）。"""
+    saved = await db.get_setting("brand_profile", "")
+    if saved:
+        try:
+            profile = json.loads(saved)
+            return {"success": True, "data": {"configured": True, **profile}}
+        except (ValueError, TypeError):
+            pass
+    return {"success": True, "data": {"configured": False, **default_brand_profile().to_dict()}}
+
+
+@router.put("/brand-profile")
+async def update_brand_profile(req: models.BrandProfileUpdate, user=Depends(require_admin)):
+    """设置被测品牌档案：根据品牌/公司/官网/行业自动派生关键词、官方域名、引用规则。"""
+    if not req.brand_name.strip():
+        raise HTTPException(400, "品牌名不能为空")
+    profile = derive_from_input(req.brand_name, req.company_name, req.website, req.industry)
+    await db.save_brand_profile(profile)
+    return {
+        "success": True,
+        "data": profile.to_dict(),
+        "message": f"已设置品牌档案：{profile.brand_name}（{profile.industry or '未填行业'}）",
+    }

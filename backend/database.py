@@ -727,6 +727,27 @@ async def delete_question(question_id: str):
         await db.close()
 
 
+async def deactivate_all_questions():
+    """把全部问题置为 inactive（生成新题集前清场，旧题软删除可恢复）。"""
+    db = await get_db()
+    try:
+        await db.execute("UPDATE questions SET is_active=0")
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def save_brand_profile(profile: BrandProfile):
+    """持久化被测品牌档案到 app_settings 并刷新缓存。
+
+    同时镜像 brand_keywords 设置，兼容既有 /settings/keywords 接口与 Settings 页。
+    """
+    global _BRAND_PROFILE_CACHE
+    await set_setting("brand_profile", profile.to_json())
+    await set_setting("brand_keywords", json.dumps(profile.keywords, ensure_ascii=False))
+    _BRAND_PROFILE_CACHE = profile
+
+
 # ============ 设置 ============
 
 async def get_setting(key: str, default: str = None) -> Optional[str]:

@@ -294,13 +294,15 @@ _DEFAULT_POLICY = {
     "ban_cooldown_sec": 900,
 }
 
-# DeepSeek 仍保留更严的覆盖（max_consecutive=15 已满足<20，burst_cooldown 提到 1800）
+# DeepSeek 保留更敏感的触发（满15题就停，比20题更早，更保守），
+# 但休息时长统一 1 小时（满足用户"满20题休息1h"要求——DeepSeek 满15题即休息1h，
+# 比满20题更早休息，符合"不超过20题"的精神，且单次休息1h不缩水）。
 _MODEL_OVERRIDES = {
     "deepseek": {
         "max_attempts": 4,
         "inter_unit_delay": 15.0,
-        "max_consecutive": 15,
-        "burst_cooldown": 1800,
+        "max_consecutive": 15,       # 更早触发（<20，更保守）
+        "burst_cooldown": 3600,      # ← 180 改 3600（统一休息1h）
         "rate_max": 20,
         "rate_window_sec": 3600,
         "ban_cooldown_sec": 1800,

@@ -234,7 +234,7 @@ async function testModel(key) {
     ElMessage.info('正在测试连接...')
     const res = await apiFetch(`/settings/models/${key}/test`, { method: 'POST' })
     if (res.success) {
-      ElMessage.success(`连接成功！UCloud提及: ${res.data?.ucloud_mentioned ? '是' : '否'}`)
+      ElMessage.success(`连接成功！品牌提及: ${res.data?.brand_mentioned ? '是' : '否'}`)
     } else {
       ElMessage.error(`连接失败: ${res.message}`)
     }

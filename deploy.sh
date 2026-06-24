@@ -1,19 +1,19 @@
 #!/bin/bash
-# UCloud GEO 评估系统 - 服务器一键部署
-# 在 xshell GEO 窗口中执行: bash <(curl -sL https://raw.githubusercontent.com/lious68/ucloud-geo-eval/master/deploy.sh)
+# 通用 GEO 评估系统 - 服务器一键部署
+# 在 xshell GEO 窗口中执行: bash <(curl -sL https://raw.githubusercontent.com/lious68/general-geo-eval/master/deploy.sh)
 # 或者先 clone 再执行
 
 set -e
 echo "========================================="
-echo "  UCloud GEO 评估系统 - 服务器部署"
+echo "  通用 GEO 评估系统 - 服务器部署"
 echo "========================================="
 
 # 1. 克隆代码
-INSTALL_DIR="/opt/ucloud-geo-eval"
+INSTALL_DIR="/opt/general-geo-eval"
 if [ ! -d "$INSTALL_DIR" ]; then
     echo "📦 克隆代码..."
     yum install -y git 2>/dev/null || apt-get install -y git 2>/dev/null
-    git clone https://github.com/lious68/ucloud-geo-eval.git $INSTALL_DIR
+    git clone https://github.com/lious68/general-geo-eval.git $INSTALL_DIR
 else
     echo "✅ 代码已存在，拉取最新..."
     cd $INSTALL_DIR && git pull

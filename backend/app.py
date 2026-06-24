@@ -1,5 +1,5 @@
 """
-UCloud GEO 评估 Web 应用 - FastAPI 入口
+通用 GEO 评估 Web 应用 - FastAPI 入口
 含鉴权中间件：设置/评测/问题管理接口需登录
 """
 import os
@@ -52,9 +52,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="UCloud GEO 评估系统",
-    description="评估UCloud在AI模型中的品牌可见度",
-    version="1.1.0",
+    title="通用 GEO 评估系统",
+    description="评估任意品牌在 AI 模型中的品牌可见度（GEO）",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -105,7 +105,7 @@ async def auth_middleware(request: Request, call_next):
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "UCloud GEO", "version": "1.1.0"}
+    return {"status": "ok", "service": "GEO Eval", "version": "2.0.0"}
 
 # 注册路由
 app.include_router(auth.router)

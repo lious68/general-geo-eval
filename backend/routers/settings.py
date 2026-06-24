@@ -117,13 +117,17 @@ async def test_model(model_key: str, enable_search: bool = False):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
         os.environ[MODELS_CONFIG[model_key]["api_key_env"]] = api_key
         from model_clients import ModelClient
+        from brand_profile import default_brand_profile
         client = ModelClient(model_key)
-        response = client.chat("请用一句话介绍UCloud优刻得", None, enable_search=enable_search)
+        # 用当前被测品牌名做连通性测试
+        profile = db.get_brand_profile()
+        test_name = profile.brand_name or default_brand_profile().brand_name
+        response = client.chat(f"请用一句话介绍{test_name}", None, enable_search=enable_search)
         if response.get("error"):
             return {"success": False, "message": response["error"]}
         content = response.get("content", "")
-        mentioned = any(kw in content for kw in ["UCloud", "ucloud", "优刻得"])
-        return {"success": True, "data": {"response": content[:500], "ucloud_mentioned": mentioned, "search_enabled": enable_search}}
+        mentioned = any(name and name in content for name in profile.display_names) or (test_name in content)
+        return {"success": True, "data": {"response": content[:500], "brand_mentioned": mentioned, "search_enabled": enable_search}}
     except Exception as e:
         return {"success": False, "message": str(e)}
 

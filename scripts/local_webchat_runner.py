@@ -64,6 +64,7 @@ from web_chat_clients import create_web_chat_client
 from analyzer import ResponseAnalyzer
 from metrics import MetricsCalculator
 from analyzer import AnalysisResult
+from brand_profile import BrandProfile, default_brand_profile
 from database import get_questions as db_get_questions
 from scheduler import EvalScheduler
 from task_units import SqliteUnitStore
@@ -172,14 +173,16 @@ def _new_run_id() -> str:
 
 def _save_manifest(run_id: str, name: str, model_keys: List[str],
                    questions: List[Dict], delay: float, output_path: str,
-                   task_meta: Optional[Dict] = None) -> str:
-    """保存任务清单（断点续跑所需：问题集 + 模型 + 参数）。"""
+                   task_meta: Optional[Dict] = None,
+                   brand_profile: Optional[BrandProfile] = None) -> str:
+    """保存任务清单（断点续跑所需：问题集 + 模型 + 参数 + 品牌档案）。"""
     os.makedirs(LOCAL_RUNS_DIR, exist_ok=True)
     path = os.path.join(LOCAL_RUNS_DIR, f"{run_id}.manifest.json")
     manifest = {
         "run_id": run_id, "name": name, "model_keys": model_keys,
         "delay": delay, "output_path": output_path, "questions": questions,
         "task_meta": task_meta or {},
+        "brand_profile": brand_profile.to_dict() if brand_profile else None,
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -283,6 +286,7 @@ async def run_local_eval(
     per_model_questions: Optional[Dict[str, List[Dict]]] = None,
     task_meta: Optional[Dict] = None,
     headed: bool = False,
+    brand_profile: Optional[BrandProfile] = None,
 ):
     """执行本地 WebChat 评测（三级任务调度：任务 → 模型 → 问题）
 
@@ -302,10 +306,13 @@ async def run_local_eval(
         output_path = manifest.get("output_path", output_path)
         name = manifest.get("name", name)
         task_meta = manifest.get("task_meta") or None
+        # 恢复品牌档案（保证续跑时分析口径与首次一致）
+        if brand_profile is None and manifest.get("brand_profile"):
+            brand_profile = BrandProfile.from_dict(manifest["brand_profile"])
         print(f"  ♻️  恢复模式: run_id={run_id}")
 
     print(SEP)
-    print("  UCloud GEO — 本地 Playwright WebChat Runner")
+    print("  GEO 评估 — 本地 Playwright WebChat Runner")
     print(SEP)
     print(f"  模型: {', '.join(model_keys)}")
     print(f"  输出: {output_path}")
@@ -370,11 +377,11 @@ async def run_local_eval(
     print(f"[2/5] 任务 run_id = {run_id}")
     store = SqliteUnitStore(os.path.join(LOCAL_RUNS_DIR, f"{run_id}.db"))
     if not resume:
-        _save_manifest(run_id, name, model_keys, questions, delay, output_path, task_meta)
+        _save_manifest(run_id, name, model_keys, questions, delay, output_path, task_meta, brand_profile)
 
     partial_path = os.path.join(OUTPUT_DIR, f"{run_id}.partial.json")
 
-    analyzer = ResponseAnalyzer()
+    analyzer = ResponseAnalyzer(brand_profile=brand_profile)
     calculator = MetricsCalculator()
     all_results: Dict[str, List] = {mk: [] for mk in model_keys}
     _q_map = {q["id"]: q for q in questions}
@@ -466,7 +473,7 @@ async def run_local_eval(
             continue
         model_name = MODEL_NAMES.get(mk, mk)
         results = [_dict_to_analysis(r) for r in all_results[mk]]
-        scores = calculator.calculate_scores(results, questions=questions)
+        scores = calculator.calculate_scores(results, questions=questions, brand_profile=brand_profile)
         geo_scores[mk] = {None: _scores_to_dict(scores)}
         print(f"  {model_name}: GEO={scores.geo_score:.1f} "
               f"覆盖={scores.coverage_rate:.2f} "
@@ -480,7 +487,7 @@ async def run_local_eval(
         for cat, cat_results in categories_map.items():
             cat_questions = [q for q in questions if q.get("category") == cat]
             cat_scores = calculator.calculate_scores([_dict_to_analysis(r) for r in cat_results],
-                                                    questions=cat_questions)
+                                                    questions=cat_questions, brand_profile=brand_profile)
             geo_scores[mk][cat] = _scores_to_dict(cat_scores)
 
     print("\n[5/5] 导出结果...")
@@ -615,6 +622,7 @@ def main():
 
     per_model_questions = None
     task_meta = None
+    brand_profile = None
     if args.config:
         print(f"  📥 从配置文件加载: {args.config}")
         with open(args.config, "r", encoding="utf-8") as f:
@@ -625,6 +633,11 @@ def main():
         question_ids = config.get("question_ids")
         categories = config.get("categories")
         task_name = config.get("task_name") or config.get("task", {}).get("name", "GEO评估")
+
+        # 读取品牌档案（服务端建批次时写入），用于本地分析口径
+        brand_profile = None
+        if config.get("brand_profile"):
+            brand_profile = BrandProfile.from_dict(config["brand_profile"])
 
         if config.get("version") == 2 or "units" in config:
             # v2：每模型独立题区间
@@ -683,6 +696,7 @@ def main():
         per_model_questions=per_model_questions,
         task_meta=task_meta,
         headed=args.headed,
+        brand_profile=brand_profile,
     ))
 
 

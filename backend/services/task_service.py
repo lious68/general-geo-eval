@@ -19,7 +19,6 @@ from metrics import MetricsCalculator
 from analyzer import AnalysisResult, CitationInfo
 from brand_profile import default_brand_profile
 
-
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
@@ -78,6 +77,8 @@ async def create_batch_config(task_id: str, model_keys: List[str],
 
     batch_id = _new_id("batch")
     run_id = _new_id("run")
+    # 品牌档案随配置透传给本地 runner，保证本地分析口径与服务端一致
+    brand_profile = db.get_brand_profile()
     config = {
         "version": 2,
         "task_id": task_id,
@@ -89,6 +90,7 @@ async def create_batch_config(task_id: str, model_keys: List[str],
         "units": [{"model_key": mk, "question_ids": per_model_question_ids[mk]} for mk in model_keys],
         "questions": questions,
         "delay": delay,
+        "brand_profile": brand_profile.to_dict(),
     }
     # 持久化完整 v2 配置，便于以后重下/重跑
     await db.add_task_batch(
@@ -133,6 +135,7 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
         "units": [{"model_key": mk, "question_ids": per_model.get(mk, [])} for mk in model_keys],
         "questions": questions,
         "delay": cfg.get("delay", 8.0),
+        "brand_profile": db.get_brand_profile().to_dict(),
     }
 
 

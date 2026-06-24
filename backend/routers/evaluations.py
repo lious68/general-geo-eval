@@ -154,11 +154,12 @@ async def recalculate_scores(run_id: str):
 
     # 重新计算
     calculator = MetricsCalculator()
+    brand_profile = db.get_brand_profile()
     total = 0
     for mk, results in results_by_model.items():
         model_name = results[0].get("model_name", mk)
         analysis_objects = [_dict_to_analysis(r) for r in results]
-        scores = calculator.calculate_scores(analysis_objects)
+        scores = calculator.calculate_scores(analysis_objects, brand_profile=brand_profile)
         await db.save_geo_scores(run_id, mk, model_name, None, _scores_to_dict(scores))
         total += len(results)
 

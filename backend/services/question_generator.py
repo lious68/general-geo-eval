@@ -139,13 +139,20 @@ async def generate_questions(brand_name: str, company_name: str = "", website: s
         raise ValueError(f"未知模型: {model_key}")
 
     # 从 DB 读取该模型的 API Key / base_url / model 并应用到 config + env
+    # DB 未配置时回退到 .env 环境变量（方便本地/部署用 .env 统一管理密钥，不入库）
     saved_key = await db.get_setting(f"api_key_{model_key}", "")
+    api_key_env = cfg.MODELS[model_key]["api_key_env"]
     if not saved_key:
-        raise ValueError(f"模型 {cfg.MODELS[model_key]['name']} 未配置 API Key，请先在「系统设置」配置")
+        saved_key = os.getenv(api_key_env, "")
+    if not saved_key:
+        raise ValueError(
+            f"模型 {cfg.MODELS[model_key]['name']} 未配置 API Key：请在 .env 设置 "
+            f"{api_key_env}，或在「系统设置」页面配置"
+        )
     saved_url = await db.get_setting(f"base_url_{model_key}", "")
     saved_model = await db.get_setting(f"model_{model_key}", "")
     if saved_key:
-        os.environ[cfg.MODELS[model_key]["api_key_env"]] = saved_key
+        os.environ[api_key_env] = saved_key
     if saved_url:
         cfg.MODELS[model_key]["base_url"] = saved_url
     if saved_model:

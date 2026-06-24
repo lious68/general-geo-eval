@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 import database as db
 from metrics import MetricsCalculator
 from analyzer import AnalysisResult, CitationInfo
+from brand_profile import default_brand_profile
 
 
 def _new_id(prefix: str) -> str:
@@ -204,10 +205,11 @@ async def recalculate_task_scores(task_id: str) -> None:
         by_model.setdefault(r["model_key"], []).append(r)
 
     calculator = MetricsCalculator()
+    brand_profile = db.get_brand_profile()
     for mk, mresults in by_model.items():
         model_name = mresults[0].get("model_name") or mk
         analysis_objects = [_result_to_analysis(r) for r in mresults]
-        scores = calculator.calculate_scores(analysis_objects, questions=task_questions)
+        scores = calculator.calculate_scores(analysis_objects, questions=task_questions, brand_profile=brand_profile)
         await db.save_task_geo_scores(task_id, mk, model_name, None, _scores_to_dict(scores))
 
         # 品类
@@ -219,7 +221,8 @@ async def recalculate_task_scores(task_id: str) -> None:
         for cat, cat_results in cat_map.items():
             cat_questions = [q for q in task_questions if q.get("category") == cat]
             cat_scores = calculator.calculate_scores(
-                [_result_to_analysis(r) for r in cat_results], questions=cat_questions
+                [_result_to_analysis(r) for r in cat_results], questions=cat_questions,
+                brand_profile=brand_profile,
             )
             await db.save_task_geo_scores(task_id, mk, model_name, cat, _scores_to_dict(cat_scores))
 

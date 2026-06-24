@@ -3,20 +3,52 @@ UCloud GEO Web - 数据库层
 SQLite 异步数据库，管理评测、结果、问题、设置
 """
 import os
+import sys
 import json
-import re
 import aiosqlite
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+# core 模块（品牌档案 + 自然问题判定）
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+from brand_profile import (
+    BrandProfile,
+    default_brand_profile,
+    is_natural_question as is_natural_question_bp,
+    build_keyword_pattern,
+)
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "geo.db")
 
-UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
-UCLOUD_CONTEXT_PATTERN = re.compile(
-    r"u\s*cloud|优\s*刻\s*得|优刻得|UCloudStack|UCloud云|优刻得云|"
-    r"UHost|UFile|UDisk|UNet|UDB|UCache|UAI|US3|UEC|UCloudStack",
-    re.IGNORECASE,
-)
+# 当前被测品牌档案缓存（init_db 时加载，brand-profile 设置时刷新）。
+# sync 辅助函数（is_natural_question / is_ucloud_related_citation 等）直接读缓存，
+# 避免在 async 上下文的同步循环里反复 await 读设置。
+_BRAND_PROFILE_CACHE: Optional[BrandProfile] = None
+
+
+def _active_brand_profile() -> BrandProfile:
+    """获取当前被测品牌档案（缓存未就绪时 fallback UCloud 默认）。"""
+    return _BRAND_PROFILE_CACHE or default_brand_profile()
+
+
+def get_brand_profile() -> BrandProfile:
+    """获取当前被测品牌档案（公共接口，供 eval_runner / task_service 等使用）。"""
+    return _active_brand_profile()
+
+
+async def refresh_brand_profile_cache():
+    """从 app_settings 重新加载品牌档案到缓存。init_db 与 brand-profile PUT 后调用。"""
+    global _BRAND_PROFILE_CACHE
+    saved = await get_setting("brand_profile", "")
+    if saved:
+        try:
+            _BRAND_PROFILE_CACHE = BrandProfile.from_dict(json.loads(saved))
+            return
+        except (ValueError, TypeError):
+            pass
+    _BRAND_PROFILE_CACHE = default_brand_profile()
+
+
 THIRD_PARTY_CITATION_DOMAINS = [
     "zhihu.com", "csdn.net", "juejin.cn", "github.com", "bilibili.com",
     "segmentfault.com", "oschina.net", "cnblogs.com", "infoq.cn", "51cto.com",
@@ -30,16 +62,16 @@ THIRD_PARTY_CITATION_DOMAINS = [
 ]
 
 
-def is_ucloud_related_citation(row: Dict[str, Any], item: Dict[str, Any], window: int = 180) -> bool:
-    """判断第三方引用 URL 附近上下文是否在讲 UCloud/优刻得。
+def is_ucloud_related_citation(row: Dict[str, Any], item: Dict[str, Any], window: int = 180,
+                               profile: Optional[BrandProfile] = None) -> bool:
+    """判断第三方引用 URL 附近上下文是否在讲被测品牌。
 
     对于 API 返回的搜索引用（position < 0），直接视为有效引用，
     因为 API 搜索结果本身就是模型回答的来源，与回答主题相关。
     """
     if item.get("is_ucloud"):
         return True
-    # API 搜索引用（position 为负数）直接视为与 UCloud 相关
-    # 因为这些 URL 是模型联网搜索时返回的来源，与回答内容直接相关
+    # API 搜索引用（position 为负数）直接视为与被测品牌相关
     position = item.get("position")
     if position is not None:
         try:
@@ -56,10 +88,12 @@ def is_ucloud_related_citation(row: Dict[str, Any], item: Dict[str, Any], window
     except (TypeError, ValueError):
         return False
     context = content[max(0, pos - window): min(len(content), pos + window)]
-    return bool(UCLOUD_CONTEXT_PATTERN.search(context))
+    p = profile or _active_brand_profile()
+    pattern = build_keyword_pattern(p.context_keywords())
+    return bool(pattern.search(context))
 
 
-def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
+def get_effective_citations(row: Dict[str, Any], profile: Optional[BrandProfile] = None) -> List[Dict[str, Any]]:
     """返回按新引用口径计入的引用明细。"""
     raw_citations = row.get("citations") or "[]"
     raw_urls = row.get("all_cited_urls") or "[]"
@@ -76,7 +110,7 @@ def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     for cit in citations or []:
         if not isinstance(cit, dict):
             continue
-        if cit.get("citation_type") == "url" and not is_ucloud_related_citation(row, cit):
+        if cit.get("citation_type") == "url" and not is_ucloud_related_citation(row, cit, profile=profile):
             continue
         effective.append(cit)
     # 从 all_cited_urls 中补充有效引用
@@ -103,27 +137,31 @@ def get_effective_citations(row: Dict[str, Any]) -> List[Dict[str, Any]]:
             seen.add(key)
             continue
 
-        # 正文中出现的 URL：仅当回答提及 UCloud 时，
-        # 且来自第三方来源域名、且上下文与 UCloud 相关，才计入
+        # 正文中出现的 URL：仅当回答提及被测品牌时，
+        # 且来自第三方来源域名、且上下文与被测品牌相关，才计入
         if not row.get("ucloud_mentioned"):
             continue
         url = (item.get("content") or "").lower()
         if not any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
             continue
-        if not is_ucloud_related_citation(row, item):
+        if not is_ucloud_related_citation(row, item, profile=profile):
             continue
         effective.append({**item, "is_ucloud": bool(item.get("is_ucloud", False))})
         seen.add(key)
     return effective
 
 
-def has_effective_citation(row: Dict[str, Any]) -> bool:
-    """按新口径判断是否有有效引用：官方引用，或提及UCloud时的第三方来源引用。"""
-    return len(get_effective_citations(row)) > 0
+def has_effective_citation(row: Dict[str, Any], profile: Optional[BrandProfile] = None) -> bool:
+    """按新口径判断是否有有效引用：官方引用，或提及被测品牌时的第三方来源引用。"""
+    return len(get_effective_citations(row, profile=profile)) > 0
 
 
 def _natural_question_filter_sql(alias: str = "q") -> str:
-    """排除引导型及题干自带 UCloud/优刻得 字眼的问题，仅统计自然问题。"""
+    """[已废弃] 排除引导型及题干自带品牌词的问题。
+
+    早期 SQL 版自然问题过滤，写死了 UCloud/优刻得。当前自然问题判定统一走
+    is_natural_question()（基于品牌档案），此函数保留仅供历史参考，不再被调用。
+    """
     q = f"{alias}.question"
     c = f"{alias}.category"
     return (
@@ -133,15 +171,15 @@ def _natural_question_filter_sql(alias: str = "q") -> str:
     )
 
 
-def is_natural_question(question: str, category: str = "") -> bool:
-    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
-    if category == "引导型":
-        return False
-    return not UCLOUD_QUESTION_PATTERN.search(question or "")
+def is_natural_question(question: str, category: str = "",
+                        profile: Optional[BrandProfile] = None) -> bool:
+    """非引导型且题干不含被测品牌词时，视为自然问题（品牌档案来自缓存）。"""
+    p = profile or _active_brand_profile()
+    return is_natural_question_bp(question, category, p)
 
 
 def is_natural_question_text(question: str) -> bool:
-    """题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
+    """题干不含被测品牌词时，视为自然问题。"""
     return is_natural_question(question)
 
 SCHEMA_SQL = """
@@ -302,6 +340,9 @@ async def init_db():
             await _import_default_questions(db)
     finally:
         await db.close()
+
+    # 加载被测品牌档案到缓存（自然问题/引用上下文判定用）
+    await refresh_brand_profile_cache()
 
 
 async def column_exists(db: aiosqlite.Connection, table: str, column: str) -> bool:
@@ -858,7 +899,7 @@ async def backfill_citations(run_id: str) -> int:
     from analyzer import ResponseAnalyzer, AnalysisResult
 
     db = await get_db()
-    analyzer = ResponseAnalyzer()
+    analyzer = ResponseAnalyzer(brand_profile=_active_brand_profile())
     count = 0
     try:
         cursor = await db.execute(

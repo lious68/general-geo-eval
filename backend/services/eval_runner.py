@@ -7,7 +7,6 @@ import sys
 import uuid
 import asyncio
 import logging
-import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -16,15 +15,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
 from database import (
     create_run, update_run_status, save_analysis_result, save_geo_scores,
-    get_questions, get_setting, get_db, get_run
+    get_questions, get_setting, get_db, get_run, get_brand_profile
 )
 from model_clients import ModelClient
 from analyzer import ResponseAnalyzer
 from metrics import MetricsCalculator
 
 logger = logging.getLogger(__name__)
-
-UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
 
 
 def _on_task_done(task: asyncio.Task):
@@ -43,12 +40,6 @@ def _on_task_done(task: asyncio.Task):
     except Exception as e:
         logger.error(f"Error retrieving task exception: {e}")
 
-
-def _is_natural_question(question: str, category: str = "") -> bool:
-    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
-    if category == "引导型":
-        return False
-    return not UCLOUD_QUESTION_PATTERN.search(question or "")
 
 # 全局任务管理
 _active_tasks: Dict[str, asyncio.Task] = {}
@@ -170,7 +161,8 @@ async def _run_evaluation(
     """
     logger.info(f"[EVAL {run_id}] Starting evaluation: mode={mode}, models={model_keys}, questions={len(questions)}")
     await update_run_status(run_id, "running")
-    analyzer = ResponseAnalyzer()
+    brand_profile = get_brand_profile()
+    analyzer = ResponseAnalyzer(brand_profile=brand_profile)
     calculator = MetricsCalculator()
 
     from scheduler import EvalScheduler
@@ -274,7 +266,7 @@ async def _run_evaluation(
 
             # 全局评分：提及率/TOP3 仅统计自然问题；引用率/情感值统计全部有效问题
             results = [_dict_to_analysis(r) for r in all_results[mk]]
-            scores = calculator.calculate_scores(results, questions=questions)
+            scores = calculator.calculate_scores(results, questions=questions, brand_profile=brand_profile)
             scores_dict = _scores_to_dict(scores)
             model_name = results[0].model_name if results else mk
             await save_geo_scores(run_id, mk, model_name, None, scores_dict)
@@ -290,7 +282,7 @@ async def _run_evaluation(
             for cat, cat_results in categories.items():
                 cat_analysis = [_dict_to_analysis(r) for r in cat_results]
                 cat_questions = [q for q in questions if q.get("category") == cat]
-                cat_scores = calculator.calculate_scores(cat_analysis, questions=cat_questions)
+                cat_scores = calculator.calculate_scores(cat_analysis, questions=cat_questions, brand_profile=brand_profile)
                 await save_geo_scores(run_id, mk, model_name, cat, _scores_to_dict(cat_scores))
 
         await update_run_status(run_id, "completed", completed)

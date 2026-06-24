@@ -14,18 +14,9 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
 from analyzer import AnalysisResult, THIRD_PARTY_CITATION_DOMAINS
+from brand_profile import BrandProfile, is_natural_question, default_brand_profile
 
 logger = logging.getLogger(__name__)
-
-# 自然问题判定：排除引导型、题干含 UCloud/优刻得 的问题
-_UCLOUD_QUESTION_PATTERN = re.compile(r"u\s*cloud|优\s*刻\s*得|优刻得", re.IGNORECASE)
-
-
-def _is_natural_question(question: str, category: str = "") -> bool:
-    """非引导型且题干不自带 UCloud/优刻得 字眼时，视为自然问题。"""
-    if category == "引导型":
-        return False
-    return not _UCLOUD_QUESTION_PATTERN.search(question or "")
 
 
 def _has_effective_citation(result: AnalysisResult) -> bool:
@@ -111,13 +102,15 @@ class MetricsCalculator:
     }
 
     def calculate_scores(self, results: List[AnalysisResult],
-                         questions: List[Dict] = None) -> GEOScores:
+                         questions: List[Dict] = None,
+                         brand_profile: BrandProfile = None) -> GEOScores:
         """计算一组分析结果的GEO评分
 
         Args:
             results: 分析结果列表
             questions: 问题列表（用于区分自然问题），格式 [{"id": ..., "question": ..., "category": ...}, ...]
                        如果不传，则按默认规则判定自然问题
+            brand_profile: 被测品牌档案（自然问题过滤用）。None 时用 UCloud 默认档案。
         """
         scores = GEOScores()
 
@@ -144,7 +137,7 @@ class MetricsCalculator:
             q = question_map.get(r.question_id, {})
             question_text = q.get("question", "")
             category = q.get("category", "")
-            if _is_natural_question(question_text, category):
+            if is_natural_question(question_text, category, brand_profile):
                 natural_results.append(r)
 
         natural_count = len(natural_results) if natural_results else len(valid_results)

@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 
 from config import BRAND_KEYWORDS, COMPETITOR_KEYWORDS, SCORE_CONFIG
+from brand_profile import BrandProfile, default_brand_profile
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +103,15 @@ class AnalysisResult:
 class ResponseAnalyzer:
     """响应分析器"""
 
-    def __init__(self):
-        self.brand_keywords = BRAND_KEYWORDS
+    def __init__(self, brand_profile: BrandProfile = None):
+        """brand_profile 为 None 时使用 UCloud 默认档案（向后兼容）。"""
+        self.brand_profile = brand_profile or default_brand_profile()
+        p = self.brand_profile
+        self.brand_keywords = p.keywords
+        self.official_domains = p.official_domains
+        self.url_patterns = p.url_patterns
+        self.reference_keywords = p.reference_keywords
+        self.display_names = p.display_names
         self.competitor_keywords = COMPETITOR_KEYWORDS
         self.score_config = SCORE_CONFIG
 
@@ -243,7 +251,7 @@ class ResponseAnalyzer:
 
         # 1. 检测UCloud相关URL（使用完整URL，而非 url_patterns 截断的短匹配）
         for pos, full_url in content_urls.items():
-            if any(re.search(p, full_url) for p in self.score_config["citation"]["url_patterns"]):
+            if any(re.search(p, full_url) for p in self.url_patterns):
                 result.citations.append(CitationInfo(
                     citation_type="url",
                     content=full_url,
@@ -253,7 +261,7 @@ class ResponseAnalyzer:
                 ))
 
         # 2. 检测参考引用关键词
-        for keyword in self.score_config["citation"]["reference_keywords"]:
+        for keyword in self.reference_keywords:
             pattern = re.compile(re.escape(keyword))
             for match in pattern.finditer(content):
                 pos = match.start()
@@ -308,11 +316,12 @@ class ResponseAnalyzer:
 
         # 检查强推荐关键词
         strength = "none"
+        brand_name = self.brand_profile.brand_name or "品牌"
         for kw in self.score_config["recommendation"]["strong_keywords"]:
             if kw in extended_context:
                 strength = "strong"
                 result.recommendations.append(RecommendationInfo(
-                    brand="UCloud",
+                    brand=brand_name,
                     strength="strong",
                     keyword=kw,
                     context=extended_context,
@@ -325,7 +334,7 @@ class ResponseAnalyzer:
                 if kw in extended_context:
                     strength = "moderate"
                     result.recommendations.append(RecommendationInfo(
-                        brand="UCloud",
+                        brand=brand_name,
                         strength="moderate",
                         keyword=kw,
                         context=extended_context,
@@ -334,11 +343,12 @@ class ResponseAnalyzer:
 
         # 检查对比胜出关键词
         if strength == "none":
+            brand_in_ctx = any(n in extended_context for n in self.display_names)
             for kw in self.score_config["recommendation"]["comparison_win_keywords"]:
-                if kw in extended_context and ("UCloud" in extended_context or "优刻得" in extended_context):
+                if kw in extended_context and brand_in_ctx:
                     strength = "comparison_win"
                     result.recommendations.append(RecommendationInfo(
-                        brand="UCloud",
+                        brand=brand_name,
                         strength="comparison_win",
                         keyword=kw,
                         context=extended_context,
@@ -467,9 +477,10 @@ class ResponseAnalyzer:
         # 收集所有品牌的首次出现位置
         brand_positions = {}
 
-        # UCloud首次位置
+        # 被测品牌首次位置（用固定占位键，避免硬编码品牌名）
+        _TARGET = "__target__"
         if result.ucloud_mentions:
-            brand_positions["UCloud"] = result.ucloud_mentions[0].position
+            brand_positions[_TARGET] = result.ucloud_mentions[0].position
 
         # 竞品首次位置
         for competitor, mentions in result.competitor_mentions.items():
@@ -479,9 +490,9 @@ class ResponseAnalyzer:
         # 按位置排序
         sorted_brands = sorted(brand_positions.items(), key=lambda x: x[1])
 
-        # 找到UCloud的排名
+        # 找到被测品牌的排名
         for rank, (brand, _) in enumerate(sorted_brands, 1):
-            if brand == "UCloud":
+            if brand == _TARGET:
                 result.ucloud_rank = rank
                 break
 
@@ -511,7 +522,7 @@ class ResponseAnalyzer:
                 continue
 
             channel = resolve_channel(url)
-            is_uc = channel.startswith("UCloud") or "ucloud" in url.lower()
+            is_uc = self.brand_profile.is_official_url(url)
 
             result.all_cited_urls.append(CitationInfo(
                 citation_type="url",
@@ -564,7 +575,7 @@ class ResponseAnalyzer:
                 continue
 
             channel = resolve_channel(url)
-            is_uc = channel.startswith("UCloud") or "ucloud" in url.lower()
+            is_uc = self.brand_profile.is_official_url(url)
 
             # 使用负数 position 标记为 API 搜索引用（非正文位置）
             # 按顺序递减，确保唯一性

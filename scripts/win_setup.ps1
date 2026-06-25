@@ -51,22 +51,41 @@ Log "代码目录: $InstallDir"
 if (-not (Test-Path "$InstallDir\scripts\win_daemon.py")) { throw "未找到 scripts\win_daemon.py，代码下载可能不完整" }
 
 Step "2. Python 3.11"
+function Test-RealPy($p) {
+    if (-not $p) { return $false }
+    if ($p -match "WindowsApps") { return $false }   # 跳过 Windows 商店 stub
+    if (-not (Test-Path $p)) { return $false }
+    try { $v = & $p --version 2>&1 } catch { return $false }
+    if ($v -notmatch "Python 3\.") { return $false }
+    return $true
+}
 function Get-Py {
-    $c = Get-Command python -ErrorAction SilentlyContinue
-    if ($c) { return $c.Source }
-    $c = Get-Command py -ErrorAction SilentlyContinue
-    if ($c) { return $c.Source }
+    $c = Get-Command python.exe -ErrorAction SilentlyContinue
+    if (Test-RealPy $c.Source) { return $c.Source }
+    $c = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($c) { try { $p = (& $c.Source -c "import sys;print(sys.executable)" 2>$null).Trim(); if (Test-RealPy $p) { return $p } } catch {} }
+    foreach ($p in @("C:\Program Files\Python311\python.exe","C:\Program Files\Python312\python.exe","C:\Program Files\Python310\python.exe")) { if (Test-RealPy $p) { return $p } }
     return $null
 }
 $py = Get-Py
 if (-not $py) {
-    Log "未检测到 Python，下载安装 3.11 ..."
+    Log "未检测到真实 Python（WindowsApps stub 不算），下载安装 3.11 ..."
     $installer = "$env:TEMP\python311.exe"
-    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" -OutFile $installer -UseBasicParsing
+    # 国内镜像优先（npmmirror），python.org 兜底
+    $pyUrls = @(
+        "https://registry.npmmirror.com/-/binary/python/3.11.9/python-3.11.9-amd64.exe",
+        "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+    )
+    $dl = $false
+    foreach ($u in $pyUrls) { try { Invoke-WebRequest -Uri $u -OutFile $installer -UseBasicParsing; $dl = $true; break } catch { Log "下载失败 $u : $($_.Exception.Message)" } }
+    if (-not $dl) { throw "Python 安装包下载失败" }
     Start-Process -FilePath $installer -ArgumentList '/quiet','InstallAllUsers=1','PrependPath=1','Include_pip=1' -Wait
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    $py = Get-Py
+    $py = "C:\Program Files\Python311\python.exe"
+    if (-not (Test-RealPy $py)) { throw "Python 3.11 安装后仍不可用: $py" }
 }
+Log "Python: $py"
+& $py --version
 if (-not $py) { throw "Python 安装后仍不可用，请检查" }
 Log "Python: $py"
 # 确保 pip

@@ -9,28 +9,23 @@ $InstallDir = "C:\general-geo-eval"
 $Port = 8443
 
 function Find-Python {
-    # 1) PATH 上的 python / py
+    # 1) PATH 上的 python / py（跳过 WindowsApps stub，验证 --version）
     $c = Get-Command python.exe -ErrorAction SilentlyContinue
-    if ($c) { return $c.Source }
+    if ($c -and $c.Source -notmatch "WindowsApps") { try { if ((& $c.Source --version 2>&1) -match "Python 3\.") { return $c.Source } } catch {} }
     $c = Get-Command py.exe -ErrorAction SilentlyContinue
-    if ($c) { try { $p = & $c.Source -c "import sys;print(sys.executable)" 2>$null; if ($p -and (Test-Path $p)) { return $p.Trim() } } catch {} }
+    if ($c) { try { $p = (& $c.Source -c "import sys;print(sys.executable)" 2>$null).Trim(); if ($p -and ($p -notmatch "WindowsApps") -and (Test-Path $p) -and ((& $p --version 2>&1) -match "Python 3\.")) { return $p } } catch {} }
     # 2) 常见安装路径
     $candidates = @(
         "C:\Program Files\Python311\python.exe",
-        "C:\Program Files\Python310\python.exe",
         "C:\Program Files\Python312\python.exe",
+        "C:\Program Files\Python310\python.exe",
         "C:\Program Files\Python39\python.exe",
         "C:\Python311\python.exe",
         "C:\Python310\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
     )
-    foreach ($p in $candidates) { if (Test-Path $p) { return $p } }
-    # 3) 在 general-geo-eval 附近/Program Files 下找
-    try {
-        $found = Get-ChildItem "C:\Program Files","C:\Program Files (x86)","C:\" -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue -Depth 4 | Select-Object -First 1
-        if ($found) { return $found.FullName }
-    } catch {}
+    foreach ($p in $candidates) { if (Test-Path $p) { try { if ((& $p --version 2>&1) -match "Python 3\.") { return $p } } catch {} } }
     return $null
 }
 

@@ -1,6 +1,6 @@
 """Windows 守护进程：收后端 webhook → 探登录态 → 等在场 → 调 runner → 回传。
 
-NSSM 注册为开机自启服务。配置见 win_daemon.env.example。
+任务计划 WinDaemon（AtLogOn 登录自启，交互会话）注册运行。配置见 win_daemon.env。
 """
 import asyncio
 import hmac
@@ -21,6 +21,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for p in (ROOT, os.path.join(ROOT, "core"), os.path.join(ROOT, "scripts"), os.path.join(ROOT, "backend")):
     if p not in sys.path:
         sys.path.insert(0, p)
+
+# 文件日志：任务计划用 pythonw.exe 无控制台，stderr 日志会丢，必须落盘才能查问题
+_log_path = os.path.join(ROOT, "output", "win_daemon.log")
+try:
+    os.makedirs(os.path.dirname(_log_path), exist_ok=True)
+    _fh = logging.FileHandler(_log_path, encoding="utf-8")
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(_fh)
+except Exception as _e:
+    logger.warning(f"文件日志初始化失败: {_e}")
 
 from web_chat_clients import create_web_chat_client  # noqa: E402
 

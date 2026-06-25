@@ -88,19 +88,22 @@ Log "Python: $py"
 & $py --version
 if (-not $py) { throw "Python 安装后仍不可用，请检查" }
 Log "Python: $py"
-# 确保 pip
-& $py -m ensurepip --upgrade 2>$null | Out-Null
-& $py -m pip install --upgrade pip -q
+# 国内 pip 镜像（乌兰察布到 pypi 官方源 SSL 不稳）
+$PipIndex = "https://pypi.tuna.tsinghua.edu.cn/simple"
+& $py -m pip config set global.index-url $PipIndex 2>$null | Out-Null
+& $py -m pip install --upgrade pip -q -i $PipIndex
 
 Step "3. 安装项目依赖"
 $reqWin = "$InstallDir\scripts\win_requirements.txt"
-if (Test-Path $reqWin) { & $py -m pip install -r $reqWin -q }
+if (Test-Path $reqWin) { & $py -m pip install -r $reqWin -q -i $PipIndex }
 # 守护进程 + runner + 分析器需要的完整依赖（与 Linux 后端对齐）
-& $py -m pip install -q fastapi uvicorn aiosqlite python-dotenv openai snownlp pandas openpyxl numpy playwright httpx aiohttp python-multipart 2>&1 | Select-Object -Last 3
+& $py -m pip install -q -i $PipIndex fastapi uvicorn aiosqlite python-dotenv openai snownlp pandas openpyxl numpy playwright httpx aiohttp python-multipart 2>&1 | Select-Object -Last 5
 Log "依赖安装完成"
 
 Step "4. Playwright Chromium"
-& $py -m playwright install chromium 2>&1 | Select-Object -Last 3
+# chromium 走 npmmirror 镜像（官方 CDN 在墙内不稳）
+$env:PLAYWRIGHT_DOWNLOAD_HOST = "https://cdn.npmmirror.com/binaries/playwright"
+& $py -m playwright install chromium 2>&1 | Select-Object -Last 5
 Log "chromium OK"
 
 Step "5. 写 win_daemon.env"

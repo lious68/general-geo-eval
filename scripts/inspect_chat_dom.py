@@ -86,7 +86,7 @@ async def inspect_site(url, name):
 async def main():
     sites = [
         ("https://chat.deepseek.com", "DeepSeek"),
-        ("https://yiyan.baidu.com", "Ernie"),
+        ("https://chat.baidu.com", "Ernie"),
         ("https://www.doubao.com/chat", "Doubao"),
         ("https://tongyi.aliyun.com/qwen", "Qwen"),
     ]

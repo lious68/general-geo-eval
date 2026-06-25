@@ -901,9 +901,10 @@ class DeepSeekWebChatClient(WebChatClientBase):
 
 
 class ErnieWebChatClient(WebChatClientBase):
-    """文心一言 (yiyan.baidu.com) WebChat 客户端
+    """文心一言 (chat.baidu.com) WebChat 客户端
 
     百度的 AI 聊天平台，支持联网搜索和深度思考。
+    原域名 yiyan.baidu.com 已迁移到 chat.baidu.com（2026）。
     Baidu 使用哈希化的 CSS 类名（如 editable__T7WAW4uW），
     因此选择器以结构/语义属性为主，辅以类名模式匹配。
     """
@@ -938,7 +939,7 @@ class ErnieWebChatClient(WebChatClientBase):
     async def _is_logged_in(self, page: Page, timeout: int = 15) -> bool:
         """文心一言真实登录态探测（覆盖基类"输入框可见"弱信号）。
 
-        文心首页 (yiyan.baidu.com) 的输入框匿名态就可见——基类判据会把匿名/登录中途
+        文心首页 (chat.baidu.com) 的输入框匿名态就可见——基类判据会把匿名/登录中途
         误判成已登录 → _login_flow 抢救保存只有匿名 cookie 的半成品 state → 下次评测
         一加载就被踢回登录页（"每次要重新登录"根因）。
 
@@ -958,7 +959,7 @@ class ErnieWebChatClient(WebChatClientBase):
 
     async def _navigate_to_chat(self, page: Page):
         """导航到文心一言"""
-        await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+        await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
 
     async def _type_question(self, page: Page, question: str):
@@ -1115,10 +1116,10 @@ class ErnieWebChatClient(WebChatClientBase):
                 await new_btn.click()
                 await asyncio.sleep(2)
             else:
-                await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+                await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
                 await asyncio.sleep(3)
         except Exception:
-            await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+            await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
 
 

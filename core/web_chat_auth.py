@@ -27,9 +27,9 @@ WEBCHAT_SITES = {
     },
     "ernie": {
         "name": "文心一言",
-        "url": "https://yiyan.baidu.com",
+        "url": "https://chat.baidu.com",
         "auth_cookies": ["BDUSS", "STOKEN", "BAIDUID", "BDTOKEN", "BIDUPSID", "BAIDUID_BFESS", "BDUSS_BFESS", "XFT", "__bid_n"],
-        "auth_domains": ["baidu.com", "yiyan.baidu.com", "xlab.baidu.com"],
+        "auth_domains": ["baidu.com", "chat.baidu.com", "yiyan.baidu.com", "xlab.baidu.com"],
     },
     "doubao": {
         "name": "豆包",

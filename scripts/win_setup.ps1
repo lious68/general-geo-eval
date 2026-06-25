@@ -99,55 +99,35 @@ Step "6. 创建数据/输出目录"
 New-Item -ItemType Directory -Force -Path "$InstallDir\data\webchat_auth" | Out-Null
 New-Item -ItemType Directory -Force -Path "$InstallDir\output" | Out-Null
 
-Step "7. NSSM"
-$nssmDir = "C:\nssm"
-$nssmExe = "$nssmDir\nssm.exe"
-if (-not (Test-Path $nssmExe)) {
-    New-Item -ItemType Directory -Force -Path $nssmDir | Out-Null
-    $nssmZip = "$env:TEMP\nssm.zip"
-    Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $nssmZip -UseBasicParsing
-    $nssmExtract = "$env:TEMP\nssm-extract"
-    if (Test-Path $nssmExtract) { Remove-Item $nssmExtract -Recurse -Force }
-    Expand-Archive -Path $nssmZip -DestinationPath $nssmExtract -Force
-    $exe = Get-ChildItem $nssmExtract -Recurse -Filter "nssm.exe" | Where-Object { $_.FullName -match "win64" } | Select-Object -First 1
-    if (-not $exe) { $exe = Get-ChildItem $nssmExtract -Recurse -Filter "nssm.exe" | Select-Object -First 1 }
-    Copy-Item $exe.FullName $nssmExe -Force
-    Remove-Item $nssmZip -Force; Remove-Item $nssmExtract -Recurse -Force
-}
-$env:Path = "$nssmDir;$env:Path"
-Log "nssm: $nssmExe"
-
-Step "8. 注册并启动 WinDaemon 服务"
-$svc = "WinDaemon"
+Step "7. 注册守护进程（任务计划-登录自启，交互会话）"
+# ⚠️ 不用 NSSM 服务：Windows 服务跑在 session 0 无桌面，headed 浏览器/验证码看不见。
+# 用任务计划「登录时触发」在 Administrator 交互会话里跑，浏览器才开在 RDP 桌面。
+# 契合 decision-a「人在才跑」：RDP 进去它才起；不在时批次留 config_downloaded，下次登录 _bootstrap_pending 自动拉回。
 $daemon = "$InstallDir\scripts\win_daemon.py"
-# 如已存在先移除
-& $nssmExe stop $svc 2>$null | Out-Null
-& $nssmExe remove $svc confirm 2>$null | Out-Null
-& $nssmExe install $svc $py $daemon
-& $nssmExe set $svc AppDirectory "$InstallDir"
-& $nssmExe set $svc AppEnvironmentExtra "PYTHONUNBUFFERED=1"
-& $nssmExe set $svc Start SERVICE_AUTO_START
-& $nssmExe set $svc AppStdout "$InstallDir\output\win_daemon.log"
-& $nssmExe set $svc AppStderr "$InstallDir\output\win_daemon.log"
-& $nssmExe start $svc
-Start-Sleep -Seconds 3
-$st = & $nssmExe status $svc
-Log "服务状态: $st"
+$pyw = $py -replace "python\.exe$","pythonw.exe"
+$exe  = if (Test-Path $pyw) { $pyw } else { $py }   # pythonw 无控制台窗口；没有则用 python
+$action  = New-ScheduledTaskAction -Execute $exe -Argument "`"$daemon`"" -WorkingDirectory $InstallDir
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User "Administrator"
+$settings= New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName "WinDaemon" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+Log "已注册任务计划 WinDaemon（登录自启，崩溃 1 分钟后自动重启）"
 
-Step "9. 自检"
-Start-Sleep -Seconds 2
+Step "8. 启动守护进程 + 自检"
+Start-ScheduledTask -TaskName "WinDaemon"
+Start-Sleep -Seconds 5
 try {
     $r = Invoke-WebRequest -Uri "http://localhost:$Port/status" -UseBasicParsing -TimeoutSec 8
     Log "自检 /status: HTTP $($r.StatusCode) -> $($r.Content)"
 } catch {
-    Log "自检失败（服务可能仍在启动）: $($_.Exception.Message)"
+    Log "自检失败（进程可能仍在启动）: $($_.Exception.Message)"
     Log "查看日志: $InstallDir\output\win_daemon.log"
 }
 
 Step "完成"
 Write-Host "`n✅ Win 守护进程安装完成。" -ForegroundColor Green
 Write-Host "   代码目录 : $InstallDir"
-Write-Host "   服务名   : $svc （开机自启）"
+Write-Host "   运行方式 : 任务计划 WinDaemon（Administrator 登录自启，非开机后台服务）"
 Write-Host "   确认页    : http://localhost:$Port （RDP 内浏览器打开，跑批次时点[开始]）"
-Write-Host "   日志      : $InstallDir\output\win_daemon.log"
+Write-Host "   日志      : 控制台窗口实时输出；异常看 $InstallDir\output\win_daemon.log"
 Write-Host "   后续      : 还需完成 5 个模型首次登录（见 runbook）"
+Write-Host "   手动管理 : Start-ScheduledTask WinDaemon / Stop-ScheduledTask WinDaemon / Get-ScheduledTask WinDaemon"

@@ -294,22 +294,38 @@ _CONFIRM_HTML = """<!doctype html><html><head><meta charset="utf-8">
 <title>WebChat 守护进程</title>
 <style>body{font-family:sans-serif;max-width:680px;margin:40px auto;padding:0 16px}
 button{padding:12px 24px;font-size:16px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer}
-button:disabled{opacity:.4}.ok{color:#16a34a}.warn{color:#d97706}</style></head>
+button:disabled{opacity:.4;cursor:default}.ok{color:#16a34a}.warn{color:#d97706}</style></head>
 <body><h1>WebChat 批次在场确认</h1>
 <div id="s">加载中…</div>
+<div id="m" style="margin:8px 0;font-size:15px"></div>
 <p><button id="b" disabled onclick="start()">开始评测</button></p>
 <script>
 async function refresh(){
-  const s=await (await fetch('/status')).json();
-  const el=document.getElementById('s');
-  if(!s.current){el.innerHTML='<span class=warn>当前无批次。可在服务器建批次后自动推送过来。</span>';document.getElementById('b').disabled=true;return;}
+  try{ const s=await (await fetch('/status')).json(); render(s); }
+  catch(e){ document.getElementById('s').innerHTML='<span class=warn>状态查询失败: '+e+'</span>'; }
+}
+function render(s){
+  const el=document.getElementById('s'); const btn=document.getElementById('b');
+  if(!s.current){ el.innerHTML='<span class=warn>当前无批次。可在服务器建批次后自动推送过来。</span>'; btn.disabled=true; return; }
   let h='<b>批次 '+s.current.batch_id+'</b><br>登录态：<br>';
-  for(const [k,v] of Object.entries(s.login||{})){h+=`${k}: ${v?'<span class=ok>已登录</span>':'<span class=warn>未登录（请先在浏览器登录该模型）</span>'}<br>`;}
+  for(const [k,v] of Object.entries(s.login||{})){ h+=`${k}: ${v?'<span class=ok>已登录</span>':'<span class=warn>未登录（请先在浏览器登录该模型）</span>'}<br>`; }
   h+=`<br>状态：${s.status}`;
   el.innerHTML=h;
-  document.getElementById('b').disabled=!s.all_in;
+  // 有批次就可点；已进入 running 之后禁用防重复点
+  btn.disabled = !!(s.status && s.status!=='awaiting_human');
 }
-async function start(){await fetch('/start',{method:'POST'});document.getElementById('b').disabled=true;refresh();}
+async function start(){
+  const btn=document.getElementById('b'); const msg=document.getElementById('m');
+  btn.disabled=true; btn.textContent='已触发…'; msg.textContent='';
+  try{
+    const r=await fetch('/start',{method:'POST'});
+    if(!r.ok){ msg.innerHTML='<span class=warn>触发失败: HTTP '+r.status+'</span>'; btn.disabled=false; btn.textContent='开始评测'; return; }
+    msg.innerHTML='<span class=ok>已触发，runner 即将启动…（看控制台日志）</span>';
+    setTimeout(refresh,1500);
+  }catch(e){
+    msg.innerHTML='<span class=warn>触发异常: '+e+'</span>'; btn.disabled=false; btn.textContent='开始评测';
+  }
+}
 refresh();setInterval(refresh,3000);
 </script></body></html>"""
 

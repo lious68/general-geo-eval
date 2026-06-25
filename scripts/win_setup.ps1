@@ -114,8 +114,10 @@ SERVICE_USER=$ServiceUser
 SERVICE_PASSWORD=$ServicePassword
 WEBHOOK_SECRET=$WebhookSecret
 "@
-Set-Content -Path $envFile -Value $envContent -Encoding UTF8
-Log "已写 $envFile"
+# ⚠️ 必须无 BOM：PowerShell 5.1 的 Set-Content -Encoding UTF8 会写 UTF-8 BOM，
+# python-dotenv 把首行读成 "﻿BACKEND_URL" → KeyError。用 .NET 写无 BOM UTF-8。
+[System.IO.File]::WriteAllText($envFile, $envContent, [System.Text.UTF8Encoding]::new($false))
+Log "已写 $envFile（无 BOM）"
 
 Step "6. 创建数据/输出目录"
 New-Item -ItemType Directory -Force -Path "$InstallDir\data\webchat_auth" | Out-Null

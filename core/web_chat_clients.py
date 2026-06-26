@@ -922,10 +922,19 @@ class ErnieWebChatClient(WebChatClientBase):
         "button[aria-label*='发送'], button[aria-label*='Send'], "
         "button[class*='send']"
     )
-    # 回答容器：answerBox 是最终输出区域（含思考+答案）
+    # 回答容器：chat.baidu.com 的回答回合。
+    # 实测 DOM（diag_ernie_response2）：回答区结构为
+    #   conversation-flow-answer-container > answer-box.last-answer-box
+    #     > chat-search-answer-generate > ... > cs-answer-container
+    # 旧选择器 [class*='answerBox'](驼峰) 匹配不到——实际类名是 answer-box(短横线)；
+    # [class*='answer'](小写) 过宽，.last 会命中底部空的 answer-tips-wrapper(innerText="")
+    # → _wait_until_no_progress_markers 取空文本恒不满足 → 死循环到 180s 超时；
+    #   _extract_response 的 .last 同样命中空 wrapper → 返回 ""。
+    # 改用精确类名 .answer-box，.last 取最新回答回合（多轮时取最后一个）。
     RESPONSE_SELECTOR = (
-        "[class*='answerBox'], "
-        "[class*='answer']"
+        ".answer-box.last-answer-box, "
+        ".answer-box, "
+        ".conversation-flow-answer-container"
     )
     NEW_CHAT_SELECTOR = (
         "button[aria-label*='新建'], "
@@ -1002,7 +1011,7 @@ class ErnieWebChatClient(WebChatClientBase):
         """
         # 等待回答区域出现
         try:
-            resp_area = page.locator("[class*='answerBox'], [class*='answer']").last
+            resp_area = page.locator(self.RESPONSE_SELECTOR).last
             await resp_area.wait_for(state="visible", timeout=30000)
         except Exception:
             await asyncio.sleep(10)
@@ -1014,7 +1023,7 @@ class ErnieWebChatClient(WebChatClientBase):
 
         # ── 阶段2：最终答案文本稳定（思考结束后答案仍在流式增长，需等其稳定）──
         await self._wait_for_text_stability(
-            page, "[class*='answerBox'], [class*='answer']", timeout=timeout
+            page, self.RESPONSE_SELECTOR, timeout=timeout
         )
 
     async def _wait_until_no_progress_markers(self, page: Page, timeout: int = 180,
@@ -1033,7 +1042,7 @@ class ErnieWebChatClient(WebChatClientBase):
             "  return (els[els.length - 1]?.innerText || '');"
             "}"
         )
-        selector = "[class*='answerBox'], [class*='answer']"
+        selector = self.RESPONSE_SELECTOR
         markers = ("正在思考", "思考中", "搜索中", "生成中", "正在搜索", "正在生成")
         elapsed = 0
         while elapsed < timeout:
@@ -1056,7 +1065,7 @@ class ErnieWebChatClient(WebChatClientBase):
         需要过滤掉思考过程的文本，只保留最终答案。
         """
         try:
-            answer_box = page.locator("[class*='answerBox'], [class*='answer']").last
+            answer_box = page.locator(self.RESPONSE_SELECTOR).last
             await answer_box.wait_for(state="visible", timeout=10000)
         except Exception:
             return ""
@@ -1067,25 +1076,23 @@ class ErnieWebChatClient(WebChatClientBase):
         #   - "准备输出结果" 分隔线
         #   - 最终答案文本
         text = await answer_box.evaluate("""el => {
-            // 尝试获取最终答案文本
-            // 思考过程在 agent-markdown 元素中，最终答案在它们之后
             const allText = el.innerText || '';
 
-            // 如果有"准备输出结果"分隔线，取其之后的内容
+            // chat.baidu.com 新版：思考过程在独立子区(_thinking-steps_*)，最终答案在
+            // answer-box 正文。优先按"准备输出结果/思考完成"分隔线取后半（保留旧逻辑兼容）。
             const marker = '准备输出结果';
             const idx = allText.lastIndexOf(marker);
             if (idx !== -1) {
                 return allText.substring(idx + marker.length).trim();
             }
 
-            // 如果有"思考完成"分隔线，取其之后的内容
             const thinkMarker = '思考完成';
             const thinkIdx = allText.lastIndexOf(thinkMarker);
             if (thinkIdx !== -1) {
                 return allText.substring(thinkIdx + thinkMarker.length).trim();
             }
 
-            // 兜底：取全文
+            // 兜底：取全文（chat.baidu.com 的 answer-box 通常只含最终答案正文）
             return allText;
         }""")
 

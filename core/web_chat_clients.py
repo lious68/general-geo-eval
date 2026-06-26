@@ -1076,23 +1076,36 @@ class ErnieWebChatClient(WebChatClientBase):
         #   - "准备输出结果" 分隔线
         #   - 最终答案文本
         text = await answer_box.evaluate("""el => {
-            const allText = el.innerText || '';
+            // chat.baidu.com：answer-box 的 innerText 混入了兄弟 UI chrome——
+            //   cs-answer-hover-menu-container（"深度思考/对话支持收藏啦/👌好的继续吧"）
+            //   answer-ask-container（"UCloud优刻得的创始人是谁"等追问建议）
+            // 这些不是答案正文。优先取内容子区 .chat-search-answer-generate /
+            // .cs-answer-container（diag 实测其文本仅比 answer-box 少这 ~73 字 chrome），
+            // 取不到再回退 answer-box 全文。
+            const content = el.querySelector(
+                '.chat-search-answer-generate, .cs-answer-container, .answer-container'
+            );
+            let allText = (content || el).innerText || '';
 
-            // chat.baidu.com 新版：思考过程在独立子区(_thinking-steps_*)，最终答案在
-            // answer-box 正文。优先按"准备输出结果/思考完成"分隔线取后半（保留旧逻辑兼容）。
+            // 防御：若仍含悬停菜单（回退路径），裁掉"深度思考"起的尾部 chrome。
+            // 加位置守卫（>40%）避免误裁答案正文里合法提及的"深度思考"。
+            const chromeIdx = allText.indexOf('深度思考');
+            if (chromeIdx !== -1 && chromeIdx > allText.length * 0.4) {
+                allText = allText.substring(0, chromeIdx).trim();
+            }
+
+            // 旧结构兼容：按"准备输出结果/思考完成"分隔线取后半
             const marker = '准备输出结果';
             const idx = allText.lastIndexOf(marker);
             if (idx !== -1) {
                 return allText.substring(idx + marker.length).trim();
             }
-
             const thinkMarker = '思考完成';
             const thinkIdx = allText.lastIndexOf(thinkMarker);
             if (thinkIdx !== -1) {
                 return allText.substring(thinkIdx + thinkMarker.length).trim();
             }
 
-            // 兜底：取全文（chat.baidu.com 的 answer-box 通常只含最终答案正文）
             return allText;
         }""")
 

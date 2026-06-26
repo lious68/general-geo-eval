@@ -212,9 +212,9 @@ Win 守护进程的配置文件 `win_daemon.env` 是用 PowerShell `Set-Content 
 
 ### 坑 4：UCloud CLI 的 OAuth 在非交互环境跑不了
 
-这是部署阶段最痛的一个。UCloud CLI 的 `ucloud auth login` 需要真正的交互式 TTY 来捕获浏览器回调，agent 的 Bash 工具和 `!` 前缀都不算交互终端 → 报「requires an interactive terminal」。token 过期后非交互环境也续不了。
+这是部署阶段最需要注意的一个。UCloud CLI 的 `ucloud auth login` 走 OAuth，需要真正的交互式 TTY 来捕获浏览器回调，agent 的 Bash 工具和 `!` 前缀都不算交互终端 → 报「requires an interactive terminal」。token 过期后非交互环境也续不了。
 
-**修法**：自动化场景用 AK/SK profile：`ucloud config add --profile <name> --public-key ... --private-key ... --active true`。密钥只存在本机 `~/.ucloud/`，命令里不嵌入密钥。
+**修法**：这一步明确分工——**人在自己的终端里跑 `ucloud auth login` 完成 OAuth 授权**（弹官网登录，一次到位），授权好之后 agent 再用已登录的 profile 去操作资源。别让 agent 替你跑登录这一步。token 过期了也是人重新登录一次。
 
 ### 坑 5：UCloud 删主机删不掉，因为 profile 默认 Region 是上海
 
@@ -258,17 +258,15 @@ npx skills add ucloud/skills ucloud-cli
 ucloud --version
 ```
 
-配 profile（自动化用 AK/SK，密钥只存本机不进命令历史）：
+登录授权（走 OAuth，不碰 AK/SK）：
 ```bash
-ucloud config add \
-  --profile my-deploy \
-  --public-key YOUR_PUBLIC_KEY \
-  --private-key YOUR_PRIVATE_KEY \
-  --region cn-wlcb --zone cn-wlcb-01 \
-  --project-id org-xxxxxx \
-  --active true
+ucloud auth login
 ```
-配完先跑只读命令确认可用：`ucloud region` / `ucloud project list` / `ucloud vpc list`。
+跑这条会弹出 UCloud 官网登录页，浏览器里完成授权即可，CLI 自动拿到凭证存到本机 `~/.ucloud/`。整个过程**不涉及任何密钥粘贴**——你不用去控制台找 AK/SK，更不用把密钥贴进命令行或写进脚本。
+
+> ⚠️ 一个前提：`ucloud auth login` 需要真正的交互式终端来捕获浏览器回调。在自己的本地终端里直接跑没问题；但**别在 agent 的非交互环境里跑**（agent 的 Bash 工具不算交互终端，会报 "requires an interactive terminal"）。所以这一步请你在自己的终端里手动完成，授权好之后 agent 再用已登录的 profile 操作资源就行。
+
+登录完先跑只读命令确认可用：`ucloud region` / `ucloud project list` / `ucloud vpc list`。
 
 **复用现有网络资源**（别重复造）：
 ```bash

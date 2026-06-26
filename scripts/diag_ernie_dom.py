@@ -24,15 +24,65 @@ os.environ["DISPLAY"] = ":0"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 from web_chat_clients import create_web_chat_client  # noqa: E402
 
-# 输入框候选选择器（尽量宽，dump 出来再看真实结构）
+# 真正的输入元素（去掉 [class*='chat' i] 等宽泛匹配，避免容器淹没真输入框）
 INPUT_CANDIDATES = (
     "textarea, "
-    "[contenteditable='true'], [contenteditable=''], "
+    "[contenteditable='true'], [contenteditable=''], [contenteditable], "
     "[role='textbox'], "
-    "input[type='text'], input[type='search'], "
-    "[class*='input' i], [class*='editor' i], [class*='textarea' i], "
-    "[class*='chat' i], [class*='prompt' i]"
+    "input[type='text'], input[type='search'], input:not([type])"
 )
+
+
+async def dump_inputs(page, label):
+    print(f"\n--- {label} 输入元素 ---")
+    try:
+        els = await page.locator(INPUT_CANDIDATES).all()
+    except Exception as e:
+        els = []
+        print("  定位异常:", e)
+    print(f"  候选数: {len(els)}")
+    for i, el in enumerate(els[:40]):
+        try:
+            vis = await el.is_visible()
+            tag = await el.evaluate("e=>e.tagName")
+            cls = (await el.get_attribute("class") or "").strip()
+            ph = await el.get_attribute("placeholder") or ""
+            ce = await el.get_attribute("contenteditable") or ""
+            role = await el.get_attribute("role") or ""
+            dt = await el.get_attribute("data-testid") or ""
+            outer = await el.evaluate("e=>e.outerHTML.slice(0,300)")
+            print(f"  [{i}] vis={vis} tag={tag} ce={ce} role={role} dt={dt}")
+            print(f"      class={cls[:90]}")
+            print(f"      ph={ph[:30]} html={outer[:260]}")
+        except Exception as e:
+            print(f"  [{i}] 读取异常: {e}")
+
+
+async def dump_buttons(page, label):
+    print(f"\n--- {label} 按钮(button / role=button) ---")
+    try:
+        btns = await page.locator("button, [role='button']").all()
+    except Exception:
+        btns = []
+    print(f"  总数: {len(btns)}")
+    cnt = 0
+    for b in btns:
+        try:
+            vis = await b.is_visible()
+            txt = (await b.inner_text()).strip()
+            al = await b.get_attribute("aria-label") or ""
+            cls = (await b.get_attribute("class") or "").strip()
+            dt = await b.get_attribute("data-testid") or ""
+            ti = await b.get_attribute("title") or ""
+            # 打印可见的，或带发送/提交语义的
+            key = (txt + al + ti + cls).lower()
+            if vis or any(k in key for k in ("发送", "send", "提交", "submit")):
+                print(f"  [vis={vis}] text={txt[:24]} aria={al[:30]} title={ti[:20]} dt={dt} class={cls[:60]}")
+                cnt += 1
+                if cnt >= 30:
+                    break
+        except Exception:
+            pass
 
 
 async def main():
@@ -46,7 +96,7 @@ async def main():
         return
     page = c._page
     await c._goto_site(page)
-    await asyncio.sleep(6)
+    await asyncio.sleep(10)  # SPA 渲染留足时间
 
     print("\n=== 页面信息 ===")
     print("URL:", page.url)
@@ -60,66 +110,37 @@ async def main():
     except Exception as e:
         print("_is_logged_in 异常:", e)
 
-    print("\n=== 输入框候选元素 ===")
-    try:
-        els = await page.locator(INPUT_CANDIDATES).all()
-    except Exception as e:
-        els = []
-        print("定位异常:", e)
-    print(f"候选数: {len(els)}")
-    for i, el in enumerate(els[:25]):
-        try:
-            vis = await el.is_visible()
-            tag = await el.evaluate("e=>e.tagName")
-            cls = await el.get_attribute("class") or ""
-            ph = await el.get_attribute("placeholder") or ""
-            ce = await el.get_attribute("contenteditable") or ""
-            role = await el.get_attribute("role") or ""
-            dt = await el.get_attribute("data-testid") or ""
-            outer = await el.evaluate("e=>e.outerHTML.slice(0,240)")
-            print(f"[{i}] vis={vis} tag={tag} ce={ce} role={role} dt={dt}")
-            print(f"    class={cls[:80]} ph={ph[:30]}")
-            print(f"    html={outer}")
-        except Exception as e:
-            print(f"[{i}] 读取异常: {e}")
+    # 主 frame 输入/按钮
+    await dump_inputs(page, "主frame")
+    await dump_buttons(page, "主frame")
 
-    print("\n=== 可见按钮（发送按钮候选）===")
-    try:
-        btns = await page.locator("button").all()
-    except Exception:
-        btns = []
-    shown = 0
-    for b in btns:
+    # iframe 检查
+    frames = page.frames
+    print(f"\n--- iframe 数: {len(frames)} ---")
+    for f in frames[1:]:  # 跳过主 frame
+        print(f"  frame: url={f.url[:80]} name={f.name}")
         try:
-            if not await b.is_visible():
-                continue
-            txt = (await b.inner_text()).strip()
-            al = await b.get_attribute("aria-label") or ""
-            cls = await b.get_attribute("class") or ""
-            dt = await b.get_attribute("data-testid") or ""
-            # 只打印疑似发送/提交的，或带图标描述的
-            key = (txt + al).lower()
-            if any(k in key for k in ("发送", "send", "提交", "submit")) or "send" in (cls + dt).lower():
-                print(f"  [疑似发送] text={txt[:20]} aria={al[:30]} dt={dt} class={cls[:60]}")
-                shown += 1
-        except Exception:
-            pass
-    if shown == 0:
-        print("  未找到带'发送/send'字样的可见按钮，下面列全部可见按钮(前15)：")
-        cnt = 0
-        for b in btns:
-            try:
-                if not await b.is_visible():
-                    continue
-                txt = (await b.inner_text()).strip()
-                al = await b.get_attribute("aria-label") or ""
-                cls = await b.get_attribute("class") or ""
-                print(f"  btn text={txt[:20]} aria={al[:30]} class={cls[:60]}")
-                cnt += 1
-                if cnt >= 15:
-                    break
-            except Exception:
-                pass
+            n = await f.locator(INPUT_CANDIDATES).count()
+            print(f"    输入元素数: {n}")
+            if n > 0:
+                await dump_inputs(f, f"frame {f.url[:50]}")
+                await dump_buttons(f, f"frame {f.url[:50]}")
+        except Exception as e:
+            print(f"    frame 访问异常: {e}")
+
+    # 底部输入区 HTML（输入框常在页面底部固定区）
+    print("\n--- 底部输入区(footer / 底部固定 div) outerHTML ---")
+    try:
+        for sel in ("footer", "[class*='footer' i]", "[class*='input-area' i]",
+                    "[class*='inputArea' i]", "[class*='dialogueInput' i]",
+                    "[class*='chatInput' i]", "[class*='chat-input' i]"):
+            cnt = await page.locator(sel).count()
+            if cnt:
+                print(f"  {sel}: {cnt} 个")
+                outer = await page.locator(sel).last.evaluate("e=>e.outerHTML.slice(0,600)")
+                print(f"    {outer[:600]}")
+    except Exception as e:
+        print("  异常:", e)
 
     await c.close()
     print("\n=== 完成 ===")

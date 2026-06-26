@@ -910,7 +910,10 @@ class ErnieWebChatClient(WebChatClientBase):
     """
 
     # ── 文心一言选择器 ──
+    # chat.baidu.com 新版输入框 id 固定为 chat-textarea（最稳），ci-textarea 为其 class
     INPUT_SELECTOR = (
+        "#chat-textarea, "
+        "textarea.ci-textarea, "
         "[contenteditable='true'], "
         "[class*='editable'], "
         "[class*='input-area'], textarea"
@@ -963,9 +966,13 @@ class ErnieWebChatClient(WebChatClientBase):
         await asyncio.sleep(3)
 
     async def _type_question(self, page: Page, question: str):
-        """在输入框中输入问题"""
-        input_el = page.locator(self.INPUT_SELECTOR).first
-        await input_el.wait_for(state="visible", timeout=10000)
+        """在输入框中输入问题（chat.baidu.com 优先 #chat-textarea，避免命中隐藏 textarea）"""
+        input_el = page.locator("#chat-textarea")
+        try:
+            await input_el.wait_for(state="visible", timeout=8000)
+        except Exception:
+            input_el = page.locator(self.INPUT_SELECTOR).first
+            await input_el.wait_for(state="visible", timeout=5000)
         await input_el.click()
         await asyncio.sleep(0.3)
         await page.keyboard.type(question, delay=30)

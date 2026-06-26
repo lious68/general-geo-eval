@@ -246,108 +246,63 @@ UCloud 上用 Windows Server 2022 镜像 `uhost create` 会报 `RetCode:8041 UIm
 - **用诊断脚本辅助调试**。像文心一言迁域名那种「DOM 变了选择器失效」的问题，让 agent 写个一次性诊断脚本 dump 真实 DOM，比让它瞎猜选择器高效十倍。
 - **安全约束要明写**。我们有一条铁律：**绝不在说明文字、计划、命令预览、补丁文本或面向用户的摘要里打印、重复或嵌入 UCLOUD_PUBLIC_KEY / UCLOUD_PRIVATE_KEY 或原始密钥材料**。优先用已有 CLI profile。这条写进 agent 的记忆，它就不会把密钥泄露到 commit 或文档里。
 
-### 第 2 步：用 UCloud CLI 准备云资源
+### 第 2 步：装一次 CLI 并登录（唯一需要你动手的一步）
 
-代码写完，要上线。UCloud 有官方 CLI（`ucloud`），而且**它是 agent-ready 的**——纯命令行、可脚本化、有清晰的产品子命令，agent 能直接调用完成全部资源操作。
+UCloud 有官方 CLI（`ucloud`），而且**它是 agent-ready 的**——纯命令行、可脚本化，agent 能直接调用它完成全部资源操作。你只需要做两件事，各一次：
 
-**前置：装 CLI + 配 profile**
-
-一行装好 UCloud CLI（自动识别系统架构，无需手动挑下载链接）：
+一行装好 CLI（自动识别系统架构）：
 ```bash
 npx skills add ucloud/skills ucloud-cli
-ucloud --version
 ```
 
 登录授权（走 OAuth，不碰 AK/SK）：
 ```bash
 ucloud auth login
 ```
-跑这条会弹出 UCloud 官网登录页，浏览器里完成授权即可，CLI 自动拿到凭证存到本机 `~/.ucloud/`。整个过程**不涉及任何密钥粘贴**——你不用去控制台找 AK/SK，更不用把密钥贴进命令行或写进脚本。
+跑这条会弹出 UCloud 官网登录页，浏览器里完成授权，CLI 自动把凭证存到本机 `~/.ucloud/`。**不涉及任何密钥粘贴**——不用去控制台找 AK/SK，更不用把密钥贴进命令行。
 
-> ⚠️ 一个前提：`ucloud auth login` 需要真正的交互式终端来捕获浏览器回调。在自己的本地终端里直接跑没问题；但**别在 agent 的非交互环境里跑**（agent 的 Bash 工具不算交互终端，会报 "requires an interactive terminal"）。所以这一步请你在自己的终端里手动完成，授权好之后 agent 再用已登录的 profile 操作资源就行。
+> ⚠️ 这一步要你在自己的终端里手动跑（OAuth 需要交互式终端捕获浏览器回调，agent 的非交互环境跑不了）。授权好之后，剩下全是 agent 的事。
 
-登录完先跑只读命令确认可用：`ucloud region` / `ucloud project list` / `ucloud vpc list`。
+完事。从这往下，**你不用再敲任何 UCloud 命令，也不用懂 region code、镜像名、CPU 内存规格、EIP 怎么绑——这些都交给 agent。**
 
-**复用现有网络资源**（别重复造）：
-```bash
-ucloud region                        # 看 region code
-ucloud project list                  # 看项目
-ucloud vpc list --region cn-wlcb     # 看可复用的 VPC
-ucloud subnet list --region cn-wlcb  # 看子网
-ucloud firewall list --region cn-wlcb # 看防火墙（乌兰察布默认有「Web服务器推荐」开 22/80/443）
-```
+### 第 3 步：用自然语言跟 agent 说「帮我部署」
 
-**建 Linux 后端主机**（带公网 EIP）：
-```bash
-ucloud uhost create \
-  --region cn-wlcb --zone cn-wlcb-01 --project-id org-xxxxxx \
-  --name geo-eval-backend \
-  --image-name "Ubuntu 22.04" \
-  --cpu 4 --memory-gb 8 \
-  --password YourAlphaNum123 \        # 纯字母数字，见坑5
-  --vpc-id uvnet-xxxx --subnet-id subnet-xxxx \
-  --firewall-id firewall-xxxx \
-  --create-eip-line BGP --create-eip-traffic-mode Traffic \
-  --bandwidth-mbps 5
-```
-注意：结尾可能蹦一个 `299 IAM permission error`，**那是 CLI 轮询 describe 时的权限报错，不影响主机创建**，主机照样 Running、EIP 照样绑定，忽略即可。
+这是整套工作流最关键的心智转变：**部署不是你去查 UCloud 文档、敲一堆 `ucloud uhost create --region ... --cpu ...` 命令，而是直接用自然语言把意图告诉 agent。**
 
-**建 Windows 守护进程主机**（要加 `--hot-plug false`，见坑6）：
-```bash
-ucloud uhost create \
-  --region cn-wlcb --zone cn-wlcb-01 --project-id org-xxxxxx \
-  --name geo-eval-win \
-  --image-name "Windows Server 2022" \
-  --hot-plug false \                  # Win 镜像必加，否则 8041
-  --cpu 4 --memory-gb 8 \
-  --password YourAlphaNum123 \
-  --vpc-id uvnet-xxxx --subnet-id subnet-xxxx \
-  --firewall-id firewall-xxxx \
-  --create-eip-line BGP --create-eip-traffic-mode Traffic \
-  --bandwidth-mbps 5
-```
+你只需要说一句：
 
-两台同 VPC，内网互通。Linux 主机 SSH 全程 paramiko 自动化；Windows 主机只能 RDP（22 开但镜像无 sshd、WinRM 开但不响应），所以 Win 上的安装/登录/跑批次得在 RDP 会话里人工做——这恰好符合「人在才跑」的设计。
+> 「帮我把这套 GEO 评估系统部署到 UCloud 上。一个 Linux 后端跑 FastAPI，一个 Windows 跑 headed 浏览器评测，两台内网互通，后端要能公网访问。」
 
-### 第 3 步：部署应用
+就这一句。接下来发生的事：
 
-**Linux 后端**（标准 Web 服务那套，agent 用 paramiko 全程自动化）：
-```bash
-# SSH 上去（ubuntu 用户，免密 sudo）
-ssh ubuntu@<EIP>
-# 拉代码、建 venv、装依赖（清华镜像）、初始化数据库
-# 写 systemd geo-eval.service（uvicorn :8000）+ nginx 反代 :80
-# systemctl enable --now geo-eval
-curl http://<EIP>/api/health   # 200 = 后端就绪
-```
+1. **agent 先读你的代码**，理解这套系统的复杂度——有几个服务、依赖什么、跑不跑浏览器、要不要桌面。它据此判断该要几台机器、什么系统、什么规格。
+2. **agent 会跟你确认几个选择题**（而不是让你填参数）：
+   - 「部署到哪个地区？乌兰察布国内延迟低、广州南方友好，你倾向哪个？」
+   - 「后端 4 核 8G 够吗？还是要大点？」
+   - 「评测那台 Windows 要带桌面体验的 Server 2022，可以吧？」
+   
+   你只需要回答「乌兰察布」「够了」「可以」这种选择，**不用懂 UCloud 的 region code 是 `cn-wlcb-01`、不用懂镜像叫什么名字、不用懂 `--hot-plug false` 这种参数**。
+3. **agent 自己调 CLI 把一切建好**：建主机、绑公网 EIP、配防火墙开 22/80/443、挂云盘、两台塞进同一个 VPC 内网互通。那些 `ucloud uhost create`、`--create-eip-line BGP`、`--hot-plug false` 之类的命令是 agent 在后台跑的，你看不到也不需要看——它甚至会绕过我们踩过的坑（比如 Win 镜像必加 `--hot-plug false`、密码用纯字母数字、乌兰察布 pip 走清华镜像），这些经验已经沉淀在它的 ucloud-cli skill 里了。
+4. **建好后 agent 把结果直接告诉你**：「Linux 后端公网 IP `117.50.x.x`，用户 `ubuntu`，密码 `xxx`；Windows 公网 IP `117.50.y.y`，RDP 登录，用户 `Administrator`，密码 `xxx`。两台内网已互通。」你拿到的是**结果**，不是过程。
 
-**Windows 守护进程**（RDP 里跑安装脚本，无 git/winget 依赖）：
-```powershell
-# RDP 进 Windows Server 2022，管理员 PowerShell
-# 一行式拉安装脚本（PowerShell 多行粘贴会倒序执行，必须一行）
-iex (irm "https://raw.githubusercontent.com/<你>/<repo>/master/scripts/win_setup.ps1") `
-  -BackendUrl "http://<后端内网IP>" `
-  -WebhookSecret "<你的webhook密钥>" `
-  -ServicePassword "<后端admin密码>"
-# 装完任务计划 WinDaemon 自启（AtLogOn），监听 :8443
-# 然后逐个登录 5 个模型（headed 弹 Chrome）
-python scripts\setup_webchat_auth.py all
-```
+### 第 4 步：agent 把应用也装上、开放公网
 
-### 第 4 步：开放公网、全世界访问
+机器建好后，agent 继续：
 
-Linux 后端绑了公网 EIP + nginx :80，dashboard 直接 `http://<公网EIP>` 就能访问。乌兰察布机房国内访问延迟低、IP 稳定（我们风控实测 2 题×5 模型，**无验证码、无封号、无限流**，乌兰察布定稿）。
+- **Linux 后端**：agent 直接 SSH 上去，拉代码、建虚拟环境、装依赖、初始化数据库、写 systemd 服务、配 nginx 反代，一条龙。完事跑个 `curl http://<公网IP>/api/health` 确认 200。
+- **Windows 评测机**：因为 headed 浏览器要人盯着验证码，这台由你在 RDP 里登录后、agent 远程指导你跑一行安装脚本，装完任务计划自启，再逐个登录 5 个模型账号（这步必须人来，符合「人在才跑」）。
 
-要 HTTPS 就再 `ucloud ucert` 申请证书或绑 ULB。日常管理：`ucloud uhost list/stop/start` 都尊重 `--region` 参数；删主机记得先把 profile 默认 region 改对（见坑5），再 `ucloud uhost delete --uhost-id <id> --region cn-wlcb --zone cn-wlcb-01 --project-id org-xxxxxx --destroy --release-eip`。
+公网访问也不用你管——后端绑了 EIP + nginx，agent 建机器时就配好了。**dashboard 直接 `http://<公网IP>` 就能开，全世界可访问。** 乌兰察布机房国内延迟低、IP 稳定（我们风控实测 2 题×5 模型，无验证码/封号/限流，乌兰察布定稿）。
 
-### 第 5 步：后续迭代——代码改了怎么同步到云上
+### 第 5 步：后续迭代——代码改了，一句话同步
 
-这是 agent + CLI 工作流最爽的地方。代码在 GitHub，云上两台主机：
+这是 agent + CLI 工作流最爽的地方。代码改完 push 到 GitHub 后：
 
-- **Linux 后端**：agent 用 paramiko SSH 上去 `git pull` + `systemctl restart geo-eval`，一条龙。
-- **Windows 守护进程**：因为只能 RDP，单文件热更新用 `Invoke-WebRequest raw.githubusercontent.com/<你>/<repo>/master/<path> -OutFile <同路径>` 覆盖单个文件（**别重跑完整 setup，会 wipe 掉登录态**）。改完不用重启，守护进程下次拉批次自然用新代码。
+> 「代码更新了，同步到云上两台机器。」
 
-整个循环：**agent 改代码 → push GitHub → CLI/SSH 同步到云 → 验证 → 上线**。从写代码到全世界能访问，中间不需要离开终端、不需要点网页控制台。
+agent 自己去 Linux `git pull` + 重启服务；Windows 那台单文件热更新（它知道别重跑完整 setup、会 wipe 登录态）。你不用记哪台机器怎么操作，agent 都记得。
+
+整个循环：**agent 写代码 → 一句「帮我部署」→ agent 调 CLI 建机器装应用开公网 → 一句「同步更新」→ agent 自己同步**。从写代码到全世界能访问，你全程只说意图，不碰 UCloud 的区域、操作系统、命令参数。**agent ready 的含义就是：agent 能根据你的意图完成所有工作，你只需要做选择和确认。**
 
 ---
 
@@ -357,7 +312,7 @@ Linux 后端绑了公网 EIP + nginx :80，dashboard 直接 `http://<公网EIP>`
 
 1. **真实而非模拟**。我们坚持用 headed 浏览器跑真实 WebChat，而不是 API 模拟。这让引用率、排名、推荐强度这些 GEO 的核心指标第一次变得可测、可信。市面上 API 模拟的方案测不出这些，本质上是在测一个用户根本看不到的接口。
 
-2. **agent + CLI 闭环**。从需求到上线，全程在终端里完成：agent 写代码和测试，CLI 建主机和资源，SSH/RDP 部署。没有「写完代码还要去网页控制台点点点」的断点。UCloud CLI 是 agent-ready 的——纯命令行、产品子命令清晰、可脚本化，agent 能直接驱动它完成部署、测试、上线全流程。
+2. **agent + CLI 闭环，意图驱动**。从需求到上线，你全程只说意图和做选择：「帮我部署」「乌兰察布」「够了」「代码更新了同步一下」。agent 读代码判断规格、调 CLI 建机器绑 EIP 挂云盘、SSH 装应用开公网，把坑都绕开，最后把 IP/密码结果交给你。UCloud CLI 是 agent-ready 的——纯命令行、可脚本化，agent 能直接驱动它完成部署、测试、上线全流程。**你不需要懂 region code、镜像名、CPU 规格、EIP 怎么绑；agent ready 就是让 agent 根据你的意图完成所有工作。**
 
 3. **指标口径经得起推敲**。每个指标的分母是什么、引用要不要链接、自然问题怎么判定、读侧为什么动态重算——这些都写在代码注释和文档里，可追溯、可复现。GEO 评估最容易糊弄的就是口径，我们选择把它讲透。
 

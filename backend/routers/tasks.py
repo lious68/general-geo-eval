@@ -91,6 +91,17 @@ async def get_batch_config(task_id: str, batch_id: str):
     return {"success": True, "data": config}
 
 
+@router.post("/{task_id}/batches/{batch_id}/repush")
+async def repush_batch(task_id: str, batch_id: str, user=Depends(require_admin)):
+    """重新触发 webhook 推送（Win 离线/丢失时手动重推）。"""
+    try:
+        ok = await task_service.repush_batch(task_id, batch_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"success": True, "data": {"pushed": ok},
+            "message": "已重推" if ok else "推送失败（Win 未达），批次保留可再重推"}
+
+
 @router.post("/{task_id}/batches/{batch_id}/import-results")
 async def import_batch_results(task_id: str, batch_id: str,
                                file: UploadFile = File(...), user=Depends(require_admin)):

@@ -619,6 +619,7 @@ def main():
     delay = args.delay if args.delay is not None else 8.0
     output_path = args.output
     task_name = "GEO评估"
+    cfg_run_id = None  # 云联动模式：配置里的 run_id，runner 须沿用，否则文件名与守护进程约定不符
 
     per_model_questions = None
     task_meta = None
@@ -662,10 +663,17 @@ def main():
             model_keys = config["task"]["model_keys"]
             task_name = config["task"].get("name", "GEO评估")
 
+        # 云联动模式：沿用配置里的 run_id（守护进程按 output/{run_id}.json 找结果 + output/{run_id}.partial.json 读进度）。
+        # 否则 runner 自生成 run_id + webchat_<name>_<ts>.json 文件名 → 守护进程 FileNotFoundError → 回传失败。
+        cfg_run_id = config.get("run_id")
+
         if not output_path:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in task_name)
-            output_path = f"output/webchat_{safe_name}_{timestamp}.json"
+            if cfg_run_id:
+                output_path = f"output/{cfg_run_id}.json"
+            else:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in task_name)
+                output_path = f"output/webchat_{safe_name}_{timestamp}.json"
         print()
     else:
         if output_path is None:
@@ -695,6 +703,7 @@ def main():
         name=task_name,
         per_model_questions=per_model_questions,
         task_meta=task_meta,
+        run_id=cfg_run_id,
         headed=args.headed,
         brand_profile=brand_profile,
     ))

@@ -292,6 +292,7 @@ URL_CHANNEL_MAPPING = {
     "doubao.com": "豆包",
     "tongyi.aliyun.com": "通义千问",
     "yiyan.baidu.com": "文心一言",
+    "chat.baidu.com": "文心一言",
     # 企业信息
     "tianyancha.com": "天眼查",
     "qcc.com": "企查查",

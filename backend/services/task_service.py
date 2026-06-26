@@ -9,8 +9,11 @@
 import os
 import sys
 import uuid
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+
+import httpx
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
@@ -18,6 +21,43 @@ import database as db
 from metrics import MetricsCalculator
 from analyzer import AnalysisResult, CitationInfo
 from brand_profile import default_brand_profile
+
+logger = logging.getLogger(__name__)
+
+
+async def _push_webhook(task_id: str, batch_id: str, run_id: str) -> bool:
+    """建批次后 fire-and-forget 推送 webhook 到 Win 守护进程。失败不改状态（留 config_downloaded）。"""
+    win_url = os.environ.get("WEBHOOK_WIN_URL", "")
+    secret = os.environ.get("WEBHOOK_SECRET", "")
+    if not win_url or not secret:
+        logger.warning("WEBHOOK_WIN_URL/WEBHOOK_SECRET 未配置，跳过推送")
+        return False
+    payload = {
+        "task_id": task_id,
+        "batch_id": batch_id,
+        "config_url": f"/api/tasks/{task_id}/batches/{batch_id}/config",
+    }
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"{win_url}/webhook/batch",
+                             json=payload,
+                             headers={"X-Webhook-Secret": secret},
+                             timeout=5)
+            r.raise_for_status()
+        await db.set_batch_status(run_id, "pushed")
+        return True
+    except Exception as e:
+        logger.warning(f"webhook 推送失败 (batch={batch_id}): {e}；批次留 config_downloaded，可重推")
+        return False
+
+
+async def repush_batch(task_id: str, batch_id: str) -> bool:
+    """手动重推：按 batch_id 找 run_id 再推一次。"""
+    run = await db.get_run_by_batch_id(batch_id)
+    if not run:
+        raise ValueError("批次不存在")
+    return await _push_webhook(task_id, batch_id, run["id"])
+
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
@@ -100,6 +140,11 @@ async def create_batch_config(task_id: str, model_keys: List[str],
         per_model=per_model_question_ids,
         config=config,
     )
+    # 建批次成功后主动推送 webhook（失败不阻塞，留 config_downloaded 可重推）
+    try:
+        await _push_webhook(task_id, batch_id, run_id)
+    except Exception as e:
+        logger.warning(f"create_batch_config 推送异常: {e}")
     return config
 
 

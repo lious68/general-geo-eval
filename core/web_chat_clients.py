@@ -901,15 +901,19 @@ class DeepSeekWebChatClient(WebChatClientBase):
 
 
 class ErnieWebChatClient(WebChatClientBase):
-    """文心一言 (yiyan.baidu.com) WebChat 客户端
+    """文心一言 (chat.baidu.com) WebChat 客户端
 
     百度的 AI 聊天平台，支持联网搜索和深度思考。
+    原域名 yiyan.baidu.com 已迁移到 chat.baidu.com（2026）。
     Baidu 使用哈希化的 CSS 类名（如 editable__T7WAW4uW），
     因此选择器以结构/语义属性为主，辅以类名模式匹配。
     """
 
     # ── 文心一言选择器 ──
+    # chat.baidu.com 新版输入框 id 固定为 chat-textarea（最稳），ci-textarea 为其 class
     INPUT_SELECTOR = (
+        "#chat-textarea, "
+        "textarea.ci-textarea, "
         "[contenteditable='true'], "
         "[class*='editable'], "
         "[class*='input-area'], textarea"
@@ -918,10 +922,19 @@ class ErnieWebChatClient(WebChatClientBase):
         "button[aria-label*='发送'], button[aria-label*='Send'], "
         "button[class*='send']"
     )
-    # 回答容器：answerBox 是最终输出区域（含思考+答案）
+    # 回答容器：chat.baidu.com 的回答回合。
+    # 实测 DOM（diag_ernie_response2）：回答区结构为
+    #   conversation-flow-answer-container > answer-box.last-answer-box
+    #     > chat-search-answer-generate > ... > cs-answer-container
+    # 旧选择器 [class*='answerBox'](驼峰) 匹配不到——实际类名是 answer-box(短横线)；
+    # [class*='answer'](小写) 过宽，.last 会命中底部空的 answer-tips-wrapper(innerText="")
+    # → _wait_until_no_progress_markers 取空文本恒不满足 → 死循环到 180s 超时；
+    #   _extract_response 的 .last 同样命中空 wrapper → 返回 ""。
+    # 改用精确类名 .answer-box，.last 取最新回答回合（多轮时取最后一个）。
     RESPONSE_SELECTOR = (
-        "[class*='answerBox'], "
-        "[class*='answer']"
+        ".answer-box.last-answer-box, "
+        ".answer-box, "
+        ".conversation-flow-answer-container"
     )
     NEW_CHAT_SELECTOR = (
         "button[aria-label*='新建'], "
@@ -938,7 +951,7 @@ class ErnieWebChatClient(WebChatClientBase):
     async def _is_logged_in(self, page: Page, timeout: int = 15) -> bool:
         """文心一言真实登录态探测（覆盖基类"输入框可见"弱信号）。
 
-        文心首页 (yiyan.baidu.com) 的输入框匿名态就可见——基类判据会把匿名/登录中途
+        文心首页 (chat.baidu.com) 的输入框匿名态就可见——基类判据会把匿名/登录中途
         误判成已登录 → _login_flow 抢救保存只有匿名 cookie 的半成品 state → 下次评测
         一加载就被踢回登录页（"每次要重新登录"根因）。
 
@@ -958,13 +971,17 @@ class ErnieWebChatClient(WebChatClientBase):
 
     async def _navigate_to_chat(self, page: Page):
         """导航到文心一言"""
-        await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+        await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
 
     async def _type_question(self, page: Page, question: str):
-        """在输入框中输入问题"""
-        input_el = page.locator(self.INPUT_SELECTOR).first
-        await input_el.wait_for(state="visible", timeout=10000)
+        """在输入框中输入问题（chat.baidu.com 优先 #chat-textarea，避免命中隐藏 textarea）"""
+        input_el = page.locator("#chat-textarea")
+        try:
+            await input_el.wait_for(state="visible", timeout=8000)
+        except Exception:
+            input_el = page.locator(self.INPUT_SELECTOR).first
+            await input_el.wait_for(state="visible", timeout=5000)
         await input_el.click()
         await asyncio.sleep(0.3)
         await page.keyboard.type(question, delay=30)
@@ -994,7 +1011,7 @@ class ErnieWebChatClient(WebChatClientBase):
         """
         # 等待回答区域出现
         try:
-            resp_area = page.locator("[class*='answerBox'], [class*='answer']").last
+            resp_area = page.locator(self.RESPONSE_SELECTOR).last
             await resp_area.wait_for(state="visible", timeout=30000)
         except Exception:
             await asyncio.sleep(10)
@@ -1006,7 +1023,7 @@ class ErnieWebChatClient(WebChatClientBase):
 
         # ── 阶段2：最终答案文本稳定（思考结束后答案仍在流式增长，需等其稳定）──
         await self._wait_for_text_stability(
-            page, "[class*='answerBox'], [class*='answer']", timeout=timeout
+            page, self.RESPONSE_SELECTOR, timeout=timeout
         )
 
     async def _wait_until_no_progress_markers(self, page: Page, timeout: int = 180,
@@ -1025,7 +1042,7 @@ class ErnieWebChatClient(WebChatClientBase):
             "  return (els[els.length - 1]?.innerText || '');"
             "}"
         )
-        selector = "[class*='answerBox'], [class*='answer']"
+        selector = self.RESPONSE_SELECTOR
         markers = ("正在思考", "思考中", "搜索中", "生成中", "正在搜索", "正在生成")
         elapsed = 0
         while elapsed < timeout:
@@ -1048,7 +1065,7 @@ class ErnieWebChatClient(WebChatClientBase):
         需要过滤掉思考过程的文本，只保留最终答案。
         """
         try:
-            answer_box = page.locator("[class*='answerBox'], [class*='answer']").last
+            answer_box = page.locator(self.RESPONSE_SELECTOR).last
             await answer_box.wait_for(state="visible", timeout=10000)
         except Exception:
             return ""
@@ -1059,25 +1076,36 @@ class ErnieWebChatClient(WebChatClientBase):
         #   - "准备输出结果" 分隔线
         #   - 最终答案文本
         text = await answer_box.evaluate("""el => {
-            // 尝试获取最终答案文本
-            // 思考过程在 agent-markdown 元素中，最终答案在它们之后
-            const allText = el.innerText || '';
+            // chat.baidu.com：answer-box 的 innerText 混入了兄弟 UI chrome——
+            //   cs-answer-hover-menu-container（"深度思考/对话支持收藏啦/👌好的继续吧"）
+            //   answer-ask-container（"UCloud优刻得的创始人是谁"等追问建议）
+            // 这些不是答案正文。优先取内容子区 .chat-search-answer-generate /
+            // .cs-answer-container（diag 实测其文本仅比 answer-box 少这 ~73 字 chrome），
+            // 取不到再回退 answer-box 全文。
+            const content = el.querySelector(
+                '.chat-search-answer-generate, .cs-answer-container, .answer-container'
+            );
+            let allText = (content || el).innerText || '';
 
-            // 如果有"准备输出结果"分隔线，取其之后的内容
+            // 防御：若仍含悬停菜单（回退路径），裁掉"深度思考"起的尾部 chrome。
+            // 加位置守卫（>40%）避免误裁答案正文里合法提及的"深度思考"。
+            const chromeIdx = allText.indexOf('深度思考');
+            if (chromeIdx !== -1 && chromeIdx > allText.length * 0.4) {
+                allText = allText.substring(0, chromeIdx).trim();
+            }
+
+            // 旧结构兼容：按"准备输出结果/思考完成"分隔线取后半
             const marker = '准备输出结果';
             const idx = allText.lastIndexOf(marker);
             if (idx !== -1) {
                 return allText.substring(idx + marker.length).trim();
             }
-
-            // 如果有"思考完成"分隔线，取其之后的内容
             const thinkMarker = '思考完成';
             const thinkIdx = allText.lastIndexOf(thinkMarker);
             if (thinkIdx !== -1) {
                 return allText.substring(thinkIdx + thinkMarker.length).trim();
             }
 
-            // 兜底：取全文
             return allText;
         }""")
 
@@ -1115,10 +1143,10 @@ class ErnieWebChatClient(WebChatClientBase):
                 await new_btn.click()
                 await asyncio.sleep(2)
             else:
-                await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+                await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
                 await asyncio.sleep(3)
         except Exception:
-            await page.goto("https://yiyan.baidu.com", wait_until="domcontentloaded", timeout=30000)
+            await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
 
 

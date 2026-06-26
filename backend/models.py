@@ -138,6 +138,13 @@ class BatchCreate(BaseModel):
     delay: float = 8.0
 
 
+class BatchStatusUpdate(BaseModel):
+    status: str
+    completed: Optional[int] = None
+    total: Optional[int] = None
+    message: Optional[str] = None
+
+
 # ============ 本地结果导入 ============
 
 class LocalResultsImport(BaseModel):

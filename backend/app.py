@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from database import init_db, verify_session
-from routers import evaluations, results, questions, settings, auth, webchat, tasks
+from routers import evaluations, results, questions, settings, auth, webchat, tasks, batches
 
 
 # 需要鉴权的路径前缀
@@ -25,6 +25,7 @@ PROTECTED_PREFIXES = [
     "/api/questions",
     "/api/webchat/auth",
     "/api/tasks",
+    "/api/batches",
 ]
 # 不需要鉴权的路径
 PUBLIC_PATHS = [
@@ -115,6 +116,7 @@ app.include_router(questions.router)
 app.include_router(settings.router)
 app.include_router(webchat.router)
 app.include_router(tasks.router)
+app.include_router(batches.router)
 
 # 静态文件（Vue 构建产物）— 必须最后挂载
 frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

@@ -212,7 +212,7 @@ bash deploy.sh
 | 模型 | 网址 | 联网搜索 |
 |------|------|---------|
 | DeepSeek | chat.deepseek.com | ❌ 无 |
-| 文心一言 | yiyan.baidu.com | ✅ 有 |
+| 文心一言 | chat.baidu.com | ✅ 有 |
 | 豆包 | doubao.com/chat | ✅ 有 |
 | Kimi | www.kimi.com | ✅ 有 |
 | 千问 | www.qianwen.com | ✅ 有 |

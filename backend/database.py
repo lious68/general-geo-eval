@@ -1132,6 +1132,39 @@ async def set_batch_status(run_id: str, status: str, completed: Optional[int] = 
     await update_run_status(run_id, status, completed)
 
 
+async def get_run_by_batch_id(batch_id: str) -> Optional[Dict]:
+    """按 batch_id 反查 evaluation_runs（Win 守护进程回报状态用）。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM evaluation_runs WHERE batch_id=?", (batch_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+# 批次状态机中「未完成」的状态：守护进程启动时拉这些批次补跑/续跑。
+PENDING_BATCH_STATUSES = ("config_downloaded", "pushed", "awaiting_human")
+
+
+async def list_pending_batches() -> List[Dict]:
+    """列出所有未完成批次（供守护进程 GET /api/batches/pending）。"""
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" * len(PENDING_BATCH_STATUSES))
+        cursor = await db.execute(
+            f"SELECT id, task_id, batch_id, status, name, mode "
+            f"FROM evaluation_runs WHERE status IN ({placeholders}) "
+            f"ORDER BY COALESCE(started_at, id) ASC",
+            PENDING_BATCH_STATUSES,
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
 async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, result: Dict):
     """按 (task_id, model_key, question_id) 去重覆盖插入。"""
     db = await get_db()

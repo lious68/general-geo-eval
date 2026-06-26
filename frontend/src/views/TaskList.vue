@@ -121,13 +121,16 @@
                     <el-tag size="small" :type="batchTagType(b.status)">{{ b.status || '-' }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="160" fixed="right">
+                <el-table-column label="操作" width="200" fixed="right">
                   <template #default="{ row: b }">
                     <el-button v-if="isAdmin()" size="small" link type="success" @click="openImport(b)">
                       <el-icon><Upload /></el-icon> 导入
                     </el-button>
                     <el-button size="small" link type="primary" @click="downloadBatchConfig(b)">
                       <el-icon><Download /></el-icon> 配置
+                    </el-button>
+                    <el-button v-if="isAdmin()" size="small" link type="warning" @click="repushBatchRow(b)">
+                      重推
                     </el-button>
                   </template>
                 </el-table-column>
@@ -207,11 +210,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
-import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores } from '../api/tasks'
+import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores, repushBatch } from '../api/tasks'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const router = useRouter()
@@ -280,12 +283,19 @@ function batchesOf(id) { return batchesMap.value[id] }
 
 async function onExpand(row, expandedRows) {
   const opened = expandedRows.some(r => r.id === row.id)
-  if (!opened) return
-  if (batchesMap.value[row.id]) return
+  if (!opened) {
+    if (pollTaskId === row.id) stopPolling()
+    return
+  }
+  if (batchesMap.value[row.id]) {
+    startPolling(row.id)
+    return
+  }
   expandLoading.value = { ...expandLoading.value, [row.id]: true }
   try {
     const res = await getTask(row.id)
     if (res?.success) batchesMap.value[row.id] = res.data.batches || []
+    startPolling(row.id)
   } catch (e) {
     ElMessage.error(`加载批次失败: ${e.message || e}`)
   } finally {
@@ -358,6 +368,42 @@ async function downloadBatchConfig(b) {
   } catch (e) {
     ElMessage.error(`下载失败: ${e.message || e}`)
   }
+}
+
+async function repushBatchRow(b) {
+  const taskId = b.task_id
+  const batchId = b.batch_id
+  if (!taskId || !batchId) return ElMessage.error('批次信息缺失')
+  try {
+    const res = await repushBatch(taskId, batchId)
+    ElMessage.success(res?.message || '已重推')
+    await refreshBatches(taskId)
+    startPolling(taskId)
+  } catch (e) {
+    ElMessage.error(`重推失败: ${e.message || e}`)
+  }
+}
+
+// 展开某任务时，若有批次在推送/等待/运行/回传中，轮询刷新状态
+let pollTimer = null
+let pollTaskId = null
+const ACTIVE_BATCH_STATUSES = ['pushed', 'awaiting_human', 'running', 'importing']
+function startPolling(taskId) {
+  stopPolling()
+  pollTaskId = taskId
+  pollTimer = setInterval(async () => {
+    const bs = batchesMap.value[taskId] || []
+    const active = bs.some(b => ACTIVE_BATCH_STATUSES.includes(b.status))
+    if (active) {
+      await refreshBatches(taskId)
+    } else {
+      stopPolling()
+    }
+  }, 15000)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  pollTaskId = null
 }
 
 function openImport(b) {
@@ -442,11 +488,13 @@ function fmtModelRange(b, mk) {
   return fmtRange(modelQids(b, mk))
 }
 function batchTagType(status) {
-  if (status === 'completed') return 'success'
-  if (status === 'config_downloaded') return 'info'
-  if (status === 'running') return 'warning'
-  if (status === 'failed') return 'danger'
-  return ''
+  const map = {
+    completed: 'success', imported: 'success',
+    config_downloaded: 'info', pushed: 'info',
+    awaiting_human: 'warning', running: 'warning', importing: 'warning',
+    failed: 'danger', push_failed: 'danger',
+  }
+  return map[status] || 'info'
 }
 
 async function openWizard() {
@@ -497,6 +545,7 @@ async function onRecalcAll() {
 }
 
 onMounted(async () => { await load() })
+onBeforeUnmount(() => { stopPolling() })
 </script>
 
 <style scoped>

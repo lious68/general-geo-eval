@@ -1,5 +1,5 @@
 """
-诊断文心一言 (yiyan.baidu.com) 登录态信号：cookie + localStorage + sessionStorage + DOM，登录前→后对比。
+诊断文心一言 (chat.baidu.com) 登录态信号：cookie + localStorage + sessionStorage + DOM，登录前→后对比。
 
 目的：找出"只在完整登录后才出现"的强信号，用于 _login_flow 的 _is_logged_in 探测。
 百度通行证 cookie（BAIDUID/BDUSS 等）有些在登录前/匿名态就有，是弱信号——会导致
@@ -21,7 +21,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-URL = "https://yiyan.baidu.com"
+URL = "https://chat.baidu.com"
 
 
 # 探测 DOM 上"登录入口"是否可见（登录前应可见，登录后应消失）

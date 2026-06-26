@@ -143,14 +143,13 @@ class MetricsCalculator:
         natural_count = len(natural_results) if natural_results else len(valid_results)
 
         # ---- 提及率（coverage_rate）----
-        # 分母：自然问题数
-        # 分子：UCloud被提及的自然问题数
+        # 分母：自然问题数；分子：UCloud被提及的自然问题数
+        # 无自然问题（如全引导型批次）→ 0，不回退到全部有效问题（否则引导型送分题虚高提及率）
         if natural_results:
             mentioned_count = sum(1 for r in natural_results if r.ucloud_mentioned)
             scores.coverage_rate = round(mentioned_count / natural_count, 4)
         else:
-            mentioned_count = sum(1 for r in valid_results if r.ucloud_mentioned)
-            scores.coverage_rate = round(mentioned_count / len(valid_results), 4)
+            scores.coverage_rate = 0.0
 
         # ---- 原提及率（mention_rate，不参与GEO得分）----
         weighted_mentions = []
@@ -173,8 +172,8 @@ class MetricsCalculator:
         scores.citation_rate = round(cited_count / len(valid_results), 4)
 
         # ---- TOP3推荐率 ----
-        # 分母：自然问题数
-        # 分子：UCloud排名≤3的自然问题数
+        # 分母：自然问题数；分子：UCloud排名≤3的自然问题数
+        # 无自然问题 → 0，不回退到全部有效问题（与提及率同因，否则引导型送分虚高推荐率）
         if natural_results:
             top3_count = sum(
                 1 for r in natural_results
@@ -193,11 +192,9 @@ class MetricsCalculator:
             scores.strong_recommend_rate = round(strong_count / natural_count, 4)
             scores.moderate_recommend_rate = round(moderate_count / natural_count, 4)
         else:
-            top3_count = sum(
-                1 for r in valid_results
-                if r.ucloud_rank is not None and r.ucloud_rank <= 3
-            )
-            scores.recommendation_rate = round(top3_count / len(valid_results), 4)
+            scores.recommendation_rate = 0.0
+            scores.strong_recommend_rate = 0.0
+            scores.moderate_recommend_rate = 0.0
 
         # ---- 情感值 ----
         # 分母：全部有效问题

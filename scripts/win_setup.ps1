@@ -1,15 +1,17 @@
 # WebChat 云上自动化 - Windows 守护进程一键安装（在 Win 主机 RDP 内以管理员 PowerShell 运行）
 #
 # 用法（管理员 PowerShell）：
-#   $params = '-BackendUrl "http://10.60.84.46" -WebhookSecret "WHK_xxx" -ServicePassword "GeoEval2026"'
-#   & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/lious68/general-geo-eval/feat/webchat-cloud-automation/scripts/win_setup.ps1"))) -BackendUrl "http://10.60.84.46" -WebhookSecret "WHK_xxx" -ServicePassword "GeoEval2026"
+#   & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/lious68/general-geo-eval/master/scripts/win_setup.ps1"))) -BackendUrl "http://10.60.84.46" -WebhookSecret "<WEBHOOK_SECRET>" -ServicePassword "<admin 密码>"
 #
 # 幂等：可重复运行。无 git/无 winget 依赖，全部直接下载。
-#  - 下载 feat 分支 zip 到 C:\general-geo-eval
+#  - 下载 master 分支 zip 到 C:\general-geo-eval
 #  - 装 Python 3.11（若无）+ 项目依赖 + playwright chromium
 #  - 写 scripts\win_daemon.env
-#  - 装 NSSM，注册并启动 WinDaemon 服务
+#  - 注册并启动任务计划 WinDaemon（AtLogOn 登录自启，交互会话）
 #  - 自检 http://localhost:8443/status
+#
+# ⚠️ 重跑会重新下载代码覆盖 C:\general-geo-eval → 会 wipe 5 模型登录态（data\webchat_auth\）。
+#    日常更新请用单文件热更新（见 docs/DEPLOY_AGENT_RUNBOOK.md），不要重跑本脚本。
 
 [CmdletBinding()]
 param(
@@ -18,7 +20,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ServicePassword,
     [string]$ServiceUser = "admin",
     [string]$InstallDir  = "C:\general-geo-eval",
-    [string]$Branch      = "feat/webchat-cloud-automation",
+    [string]$Branch      = "master",
     [int]   $Port        = 8443
 )
 

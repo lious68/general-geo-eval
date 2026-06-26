@@ -3,16 +3,18 @@
              title="添加批次（子任务：模型 × 品类 × 题号区间）" width="820px" @open="onOpen">
     <el-alert type="info" :closable="false" style="margin-bottom:12px">
       每个批次 = <b>一个模型</b>（或<b>全部模型</b>）+ <b>一个品类</b>（或全部）+ <b>题号区间</b>。
-      选「全部模型」时该行的品类/题区间应用到所有已配置登录态的模型，下载配置时展开成每模型一个 unit。
+      选「全部模型」时该行的品类/题区间应用到所有模型，下载配置时展开成每模型一个 unit。
       同一模型可分多次下载不同品类/区间（如 豆包·海外云主机·1-12，再 豆包·海外云主机·13-20），
       导入后按 (任务,模型,问题) 自动合并，不会覆盖已导入结果。
+      <br/>模型不要求预先登录：未登录的模型首次运行时会弹浏览器让你登录，登录态自动保存复用。
     </el-alert>
 
     <div v-for="(row, i) in batchRows" :key="i" class="batch-row">
       <div class="row-line1">
-        <el-select v-model="row.model_key" placeholder="选模型" style="width:200px">
+        <el-select v-model="row.model_key" placeholder="选模型" style="width:220px">
           <el-option label="全部模型 (all)" value="__all__" />
-          <el-option v-for="m in readyModels" :key="m.key" :label="m.name" :value="m.key"
+          <el-option v-for="m in allModels" :key="m.key" :label="m.name + (m.is_logged_in ? ' ✓' : '')"
+                     :value="m.key"
                      :disabled="batchRows.some((r,j)=>j!==i&&r.model_key===m.key)" />
         </el-select>
         <el-select v-model="row.category" placeholder="品类" style="width:200px" @change="onCategoryChange(row)">
@@ -66,7 +68,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:visible', 'downloaded'])
 
-const readyModels = ref([])
+const allModels = ref([])            // 全部模型（不按登录态过滤），登录态仅作角标显示
 const taskQuestions = ref([])        // [{id, category, ...}] 限本任务总题集
 const batchRows = ref([])
 const delay = ref(8)
@@ -94,11 +96,13 @@ async function loadModels() {
     ])
     const models = (mRes.data && (mRes.data.models || mRes.data)) || []
     const ws = wsRes.data || {}
-    readyModels.value = models.map(m => {
+    // 不再按登录态过滤：未登录的模型也能选，首次运行时会弹浏览器引导登录并保存。
+    // 登录态仅作为「✓」角标展示，提示用户哪些已可直接跑、哪些会触发首次登录。
+    allModels.value = models.map(m => {
       const w = ws[m.key] || {}
-      return { ...m, webchat_status: w.has_auth ? 'ready' : 'no_auth' }
-    }).filter(m => m.webchat_status === 'ready')
-    if (!readyModels.value.length) ElMessage.warning('暂无已配置登录态的模型，请先在本地运行 setup_webchat_auth.py')
+      return { ...m, is_logged_in: !!(w.has_auth && w.is_valid) }
+    })
+    if (!allModels.value.length) ElMessage.warning('未获取到任何模型配置')
   } catch (e) {
     ElMessage.error(`加载模型失败: ${e.message || e}`)
   }
@@ -142,19 +146,19 @@ async function downloadBatch() {
   // 校验非空
   for (const mk in per_model) if (!per_model[mk].length) return ElMessage.warning(`模型 ${mk} 所选品类下无题目`)
 
-  // 「all」展开成全部已配置登录态的模型，每个模型沿用同一题区间；
-  // 显式选过的模型优先（不重复）。
+  // 「all」展开成全部模型，每个模型沿用同一题区间；
+  // 显式选过的模型优先（不重复）。未登录的模型也展开——首次运行时会弹浏览器引导登录并保存。
   const ALL_KEY = '__all__'
   const explicitKeys = Object.keys(per_model).filter(k => k !== ALL_KEY)
   const finalPerModel = {}
   for (const k of explicitKeys) finalPerModel[k] = per_model[k]
   if (ALL_KEY in per_model) {
-    for (const m of readyModels.value) {
+    for (const m of allModels.value) {
       if (m.key in finalPerModel) continue
       finalPerModel[m.key] = per_model[ALL_KEY]
     }
   }
-  if (!Object.keys(finalPerModel).length) return ElMessage.warning('暂无已配置登录态的模型可展开「all」')
+  if (!Object.keys(finalPerModel).length) return ElMessage.warning('没有可展开「all」的模型')
 
   downloading.value = true
   try {

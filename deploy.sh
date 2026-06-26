@@ -1,7 +1,7 @@
 #!/bin/bash
-# 通用 GEO 评估系统 - 服务器一键部署
-# 在 xshell GEO 窗口中执行: bash <(curl -sL https://raw.githubusercontent.com/lious68/general-geo-eval/master/deploy.sh)
-# 或者先 clone 再执行
+# 通用 GEO 评估系统 - Linux 后端一键部署
+# 在 Linux 主机上执行: bash <(curl -sL https://raw.githubusercontent.com/lious68/general-geo-eval/master/deploy.sh)
+# 或者先 clone 再执行。默认拉 master 分支（GitHub 权威源）。
 
 set -e
 echo "========================================="

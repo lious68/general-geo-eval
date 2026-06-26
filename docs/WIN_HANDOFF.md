@@ -1,8 +1,12 @@
-# Win 守护进程交接文档（2026-06-25）
+# Win 守护进程交接文档（2026-06-26）
 
-> 给 Win 主机上的 Claude Code 用：读这份就等于接上了当前进度。
+> 给 Win 主机上的 Claude Code 用：读这份 + 配套的 [部署 runbook](./DEPLOY_AGENT_RUNBOOK.md) 就能接上当前进度。
 > 本机（开发机 `C:\Users\las\general-geo-eval`）的会话上下文无法跨机器同步，这份文档是等价替代。
-> 项目分支 `feat/webchat-cloud-automation`，最新 commit `7f1a6be`。
+> 主分支 `master`（GitHub 上为权威源；Linux/Win 均已切到 master）。
+
+> 🔐 **密钥不在本文档**：主机密码、admin 密码、WEBHOOK_SECRET 等真实值**绝不写入 repo**。
+> 它们只存在开发机 Claude 的 memory 文件里（`general-geo-eval-deploy`、`ucloud-deploy-gotchas`）和已登录的 UCloud CLI profile。
+> 下文表格一律用 `<占位符>`。agent 读到占位符后，从本机 memory 取真实值代入 SSH/SCP 命令，不在任何输出里回显。
 
 ---
 
@@ -15,6 +19,7 @@ WebChat 云上自动化：Linux 后端建批次 → webhook 推 Win 守护进程
 - 每个模型跑 20 题/小时后**休息 1 小时**（`webchat_policy` 限流，防封号）
 - **decision-a「人在才跑」**：守护进程只在 Administrator 登录 RDP 时才跑（任务计划 AtLogOn 触发）；人不在时批次留 `config_downloaded`，下次登录 `_bootstrap_pending` 自动拉回
 - `.env` / `win_daemon.env` 含密钥，**绝不 push GitHub**
+- 模型**不要求预先登录**：未登录的模型首次跑批次时会弹浏览器引导登录并自动保存 storageState（runner 的 `_login_flow` 实现）
 
 ---
 
@@ -28,13 +33,14 @@ WebChat 云上自动化：Linux 后端建批次 → webhook 推 Win 守护进程
 | 内网 IP | `10.60.84.46` | `10.60.164.214` |
 | 系统 | Ubuntu 22.04 | Windows Server 2022（geo_win_svr 镜像）|
 | 用户 | `ubuntu`（免密 sudo）| `Administrator` |
-| 主机密码 | `GeoEval2026Server` | `GeoEval2026Server` |
+| 主机密码 | `<见 memory: 主机密码>` | 同左 |
 | 代码目录 | `/opt/general-geo-eval` | `C:\general-geo-eval` |
 | 服务 | systemd `geo-eval.service`（uvicorn :8000）+ nginx :80 | 任务计划 `WinDaemon`（aiohttp :8443）|
-| 后端 admin | `admin` / `GeoEval2026` | — |
-| WEBHOOK_SECRET | `WHK_4H5AATfjgv2BVi8Iv3lru3HMD-75gicH` | 同左 |
+| 后端 admin | `admin` / `<见 memory: admin 密码>` | — |
+| WEBHOOK_SECRET | `<见 memory: WEBHOOK_SECRET>` | 同左 |
 
 区域 UCloud 乌兰察布 `cn-wlcb-01`，项目 `org-xuwspu`，两机同 VPC 内网互通。
+真实密钥值见开发机 memory `general-geo-eval-deploy`，agent 代入命令时不回显。
 
 **Win 远程执行全不可用**（22 开无 sshd、WinRM 5985/5986 开但不响应）→ Win 上一切操作必须在 RDP 会话里做。Linux 可全程 paramiko SSH 自动化。
 
@@ -46,35 +52,32 @@ WebChat 云上自动化：Linux 后端建批次 → webhook 推 Win 守护进程
 |---|---|---|
 | 34 | 建两台主机 | ✅ 完成 |
 | 35 | 部署 Linux 后端 | ✅ 完成（health 200，admin 登录通，100 题已入库）|
-| 36 | 部署 Win 守护进程 | ✅ 完成（但 env BOM bug 刚修，待最终验证）|
+| 36 | 部署 Win 守护进程 | ✅ 完成 |
 | 37 | 首次登录 5 个模型 | ✅ 完成（kimi/deepseek/ernie/doubao/qwen storageState 全存到 `data\webchat_auth\`）|
-| **38** | **联调小批次** | 🔄 **进行中（当前卡点）** |
-| 39 | 风控实测 + 收尾 | ⏳ 待 |
+| 38 | 联调小批次 | ✅ 完成（3 题×kimi GEO=75.0 全链路跑通）|
+| 39 | 风控实测 + 收尾 | ✅ 完成（2 题×5 模型，乌兰察布无风控，4 模型出分，定稿）|
+
+> 联调/风控详见开发机 memory `general-geo-eval-deploy`。本节为历史归档，无待办。
 
 ---
 
-## 4. 当前卡点（联调小批次）
+## 4. 联调批次（历史归档，已跑通）
 
-已在后端建了一个联调批次推过去，但 Win 守护进程之前因 **env 文件 UTF-8 BOM** 导致 `KeyError: 'BACKEND_URL'` 一启动就 exit 1，所以 webhook 没送达。
+首个联调批次曾因 **env 文件 UTF-8 BOM** 导致 `KeyError: 'BACKEND_URL'` 一启动就 exit 1，webhook 没送达。已修：`scripts/win_setup.ps1` 改用 `WriteAllText` + `UTF8Encoding($false)` 写无 BOM env；runner run_id 文件名对齐；确认页[开始]按钮加错误反馈。三坑修复后全链路跑通。
 
-**已做的修复：**
-1. `scripts/win_setup.ps1` 改用 `WriteAllText` + `UTF8Encoding($false)` 写无 BOM env（commit `7f1a6be`，已 push）
-2. 待用户在 Win RDP 手动重写 env 一次（Win 上跑的 setup 是旧的）
-
-**待验证的联调批次：**
+联调批次示例（已 completed/imported）：
 ```
-TASK_ID  = task_20260625_230415_4a46d3   （联调小批次，3题 q001/q002/q003）
+TASK_ID  = task_20260625_230415_4a46d3   （3题 q001/q002/q003）
 BATCH_ID = batch_20260625_230416_29fe79
 RUN_ID   = run_20260625_230416_db4db4
 模型     = kimi
-当前状态 = config_downloaded（webhook 未送达，待守护进程起来后 _bootstrap_pending 自动拉）
 ```
 
-**联调验证流程（守护进程起来后）：**
-1. RDP 浏览器开 `http://localhost:8443` → 应看到批次 + kimi 登录态
-2. 点 [开始评测] → 守护进程调 `local_webchat_runner.py --headed`
+新批次跑通流程（参考）：
+1. RDP 浏览器开 `http://localhost:8443` → 应看到批次 + 各模型登录态
+2. 点 [开始评测] → 守护进程调 `local_webchat_runner.py --headed`（未登录模型会先弹浏览器引导登录并保存）
 3. 盯状态流转：`config_downloaded → pushed → awaiting_human → running → importing → imported`
-4. Dashboard 出 GEO 评分 = 联调成功
+4. Dashboard 出 GEO 评分 = 成功
 
 ---
 
@@ -96,8 +99,8 @@ cd C:\general-geo-eval
 # 日志
 Get-Content C:\general-geo-eval\output\win_daemon.log -Tail 50 -Wait
 
-# 重装（拉最新代码，复用已装 Python/依赖）
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/lious68/general-geo-eval/feat/webchat-cloud-automation/scripts/win_setup.ps1"))) -BackendUrl "http://10.60.84.46" -WebhookSecret "WHK_4H5AATfjgv2BVi8Iv3lru3HMD-75gicH" -ServicePassword "GeoEval2026"
+# 重装（拉最新代码，复用已装 Python/依赖；⚠️ 会 wipe 5 模型登录态，仅在首次部署或确认可重登时用）
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/lious68/general-geo-eval/master/scripts/win_setup.ps1"))) -BackendUrl "http://10.60.84.46" -WebhookSecret "<WEBHOOK_SECRET>" -ServicePassword "<admin 密码>"
 
 # 5 模型登录（headed，逐个弹 Chrome）
 python scripts\setup_webchat_auth.py all
@@ -122,12 +125,9 @@ python scripts\setup_webchat_auth.py all
 
 ## 7. 接下来要做的
 
-**Task #38 联调**（当前）：守护进程验证起来 → 确认页点开始 → 跑通 3 题 kimi → Dashboard 出分。
+全部联调与风控实测已完成（见开发机 memory `general-geo-eval-deploy`）：3 题×kimi 联调 GEO=75.0 跑通；2 题×5 模型风控实测乌兰察布无验证码/封号/限流，4 模型正常出分，**乌兰察布定稿**；ernie chat.baidu.com 适配完成（commit e7f4dc8/986adac）。
 
-**Task #39 风控实测 + 收尾**：
-- 5 题 × 5 模型，测乌兰察布机房 IP 风控
-- 频繁验证码/封号 → 改广州区域重建
-- 稳定 → 乌兰察布定稿，更新 memory + commit
+后续只剩**日常迭代**：代码改了在开发机 `git push` → 「同步到云上」→ agent SSH 到 Linux `git pull`+重建前端+重启；Win 侧单文件热更新（见 runbook）。
 
 ---
 

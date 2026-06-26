@@ -252,11 +252,9 @@ UCloud 上用 Windows Server 2022 镜像 `uhost create` 会报 `RetCode:8041 UIm
 
 **前置：装 CLI + 配 profile**
 
-macOS / Linux / Windows 分别按架构下载二进制：
+一行装好 UCloud CLI（自动识别系统架构，无需手动挑下载链接）：
 ```bash
-# Linux amd64 为例
-curl -o ucloud https://ucloud-infra.cn-bj.ufileos.com/cli/linux_amd64/ucloud
-chmod +x ucloud && sudo mv ucloud /usr/local/bin/
+npx skills add ucloud/skills ucloud-cli
 ucloud --version
 ```
 

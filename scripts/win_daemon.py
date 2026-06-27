@@ -211,7 +211,11 @@ class WinDaemon:
         # 2. 探登录态
         login_status = await self.probe_logins(model_keys)
         all_in = all(login_status.values()) and bool(model_keys)
-        status = "running" if all_in else "awaiting_human"
+        # 此时无论是否全部登录，都还在等用户介入（全部登录→点[开始]；未登录→先登录），
+        # 统一报 awaiting_human。报 running 会让确认页按钮被禁用
+        # （btn.disabled = status!=='awaiting_human'），用户点了没反应。
+        # 真正进入 running 是用户点[开始]之后（见下方 step 3）。
+        status = "awaiting_human"
         self._last_login = login_status
         self._all_in = all_in
         self._last_status = status
@@ -261,9 +265,20 @@ class WinDaemon:
         partial_path = os.path.join(self.output_dir, f"{run_id}.partial.json")
         out_path = os.path.join(self.output_dir, f"{run_id}.json")
 
+        runner_log_path = os.path.join(self.output_dir, f"{batch_id}.runner.log")
+        # 必须把子进程 std 重定向到文件：runner 被 pythonw（无控制台）拉起时，
+        # 不重定向会让 runner 内部 print / 未捕获异常全部丢失，runner 出错只能靠
+        # 退出码猜测，无法定位。重定向后 runner 全部输出落到 .runner.log 可查。
+        log_fp = open(runner_log_path, "w", encoding="utf-8")
         cmd = [sys.executable, self.runner_path, "--config", cfg_path, "--headed"]
-        logger.info(f"启动 runner: {' '.join(cmd)}")
-        proc = await asyncio.create_subprocess_exec(*cmd)
+        logger.info(f"启动 runner: {' '.join(cmd)}（日志 → {runner_log_path}）")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=log_fp, stderr=asyncio.subprocess.STDOUT
+            )
+        except Exception:
+            log_fp.close()
+            raise
 
         async def heartbeat():
             while proc.returncode is None:
@@ -274,8 +289,11 @@ class WinDaemon:
                 except Exception as e:
                     logger.warning(f"heartbeat 失败: {e}")
         hb = asyncio.create_task(heartbeat())
-        rc = await proc.wait()
-        hb.cancel()
+        try:
+            rc = await proc.wait()
+        finally:
+            log_fp.close()
+            hb.cancel()
 
         if rc != 0:
             logger.error(f"runner 退出码 {rc}，状态 failed（partial 已存可 --resume）")

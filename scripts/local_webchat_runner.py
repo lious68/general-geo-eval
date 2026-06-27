@@ -21,10 +21,30 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 # Windows 控制台默认 GBK 编码，切换为 UTF-8 避免 emoji 报错
-if sys.platform == "win32":
+# 注意：被 win_daemon 用 pythonw.exe（无控制台）拉起且未重定向 std 时，
+# sys.stdout/stderr 可能为 None（.buffer 不可用），直接包装会抛
+# AttributeError 导致 runner 在第一行就崩溃。此时跳过包装：
+# 输出虽会丢失，但评测本身靠 win_daemon 日志 + 结果文件，不影响功能。
+if sys.platform == "win32" and sys.stdout is not None and sys.stderr is not None:
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except (AttributeError, io.UnsupportedOperation, ValueError):
+        pass
+
+# 全局日志：runner 被 pythonw（无控制台）拉起时，scheduler/web_chat_clients 用
+# logging.getLogger 输出的 warning（如"未配置，跳过"）会随 stdout 丢失，造成
+# 可观测性盲区。这里统一配 FileHandler 落到 output/runner_global.log，确保
+# scheduler 的跳过/限流/异常决策都能事后查到。
+import logging as _logging
+_logging.basicConfig(
+    level=_logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[_logging.FileHandler(
+        os.path.join(os.path.dirname(__file__), "..", "output", "runner_global.log"),
+        encoding="utf-8")],
+)
 
 # ── 常量 ──
 SEP = "=" * 72
@@ -48,12 +68,22 @@ def _setup_headed_mode(headed: bool):
     - 有 DISPLAY → headed（显示窗口）
     - 无 DISPLAY → headless（后台运行）
     Windows 默认无 DISPLAY，所以需要手动设置。
+
+    注意：print 在 pythonw 无控制台 + std 未重定向时会抛异常，必须吞掉，
+    否则 --headed 下第一条 print 就会让 runner 崩溃、DISPLAY 反而没设上，
+    导致 daemon 拉起的 runner 走 headless 被网站反爬。先设环境变量再 print。
     """
     if headed:
         os.environ["DISPLAY"] = ":0"
-        print("  🖥️  浏览器窗口模式已启用（能看到浏览器窗口）")
+        try:
+            print("  🖥️  浏览器窗口模式已启用（能看到浏览器窗口）")
+        except (ValueError, OSError):
+            pass  # stdout 已关闭（pythonw 无控制台），无碍，DISPLAY 已设上
     else:
-        print("  🌑 后台模式（不显示浏览器窗口）")
+        try:
+            print("  🌑 后台模式（不显示浏览器窗口）")
+        except (ValueError, OSError):
+            pass
 
 
 # 添加项目路径（必须在设置环境变量之后，因为 import 时会初始化客户端）
@@ -387,16 +417,22 @@ async def run_local_eval(
     _q_map = {q["id"]: q for q in questions}
     total = len(questions) * len(model_keys)
 
-    # 若恢复，先把已 done 的单元回填进 all_results（用 store 里的 content 重算）
-    if resume:
-        for u in store.list_units(run_id, "done"):
-            analysis = analyzer.analyze(
-                question_id=u.question_id, model_key=u.model_key,
-                model_name=u.model_name or MODEL_NAMES.get(u.model_key, u.model_key),
-                content=u.content or "", error=None,
-            )
-            all_results[u.model_key].append(_analysis_to_dict(analysis))
-        print(f"  恢复: 已完成 {sum(len(v) for v in all_results.values())} 个单元，仅补跑剩余")
+    # 回填 store 里已 done 的单元（用 store 里的 content 重算）。
+    # 必须对 resume 和非 resume 都执行：run_id 可能被复用（daemon 从 config.run_id 取），
+    # 同一 run_id 多次跑时，历史 done 单元若不回填，本次没跑新单元 → all_results 为空 →
+    # 后面"补齐空结果"逻辑会把它们填成假错误"WebChat 未配置登录状态 / 跳过"，覆盖真实结果。
+    done_count = 0
+    for u in store.list_units(run_id, "done"):
+        analysis = analyzer.analyze(
+            question_id=u.question_id, model_key=u.model_key,
+            model_name=u.model_name or MODEL_NAMES.get(u.model_key, u.model_key),
+            content=u.content or "", error=None,
+        )
+        all_results[u.model_key].append(_analysis_to_dict(analysis))
+        done_count += 1
+    if done_count:
+        tag = "恢复" if resume else "回填"
+        print(f"  {tag}: 已完成 {done_count} 个单元" + ("" if resume else "（复用 run_id 历史结果）"))
 
     # 3. 回调
     def _dump_partial():

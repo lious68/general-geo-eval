@@ -7,6 +7,10 @@ __pycache__/
 dist/
 build/
 
+# Secrets — 真实凭证文件，绝不推送（example 文件可推）
+scripts/win_daemon.env
+*.local.env
+
 # Data
 data/
 output/

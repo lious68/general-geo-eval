@@ -1210,9 +1210,31 @@ class DoubaoWebChatClient(WebChatClientBase):
 
     async def _type_question(self, page: Page, question: str):
         """在输入框中输入问题"""
+        # 关掉登录后/首屏可能弹出的遮罩 dialog（role=dialog / radix dialog），
+        # 否则它 intercept pointer events，输入框点不动（30s 超时）。
+        try:
+            for sel in [
+                "[role='dialog'] [class*='close']",
+                "[role='dialog'] button[aria-label*='关闭']",
+                "[role='dialog'] button[aria-label*='Close']",
+                "div[class*='mask'], div[class*='overlay'], div[class*='backdrop']",
+            ]:
+                try:
+                    m = page.locator(sel).first
+                    if await m.is_visible(timeout=1500):
+                        await m.click(timeout=2000)
+                        await asyncio.sleep(0.4)
+                except Exception:
+                    pass
+            # 直接按 Esc 关 radix dialog（最可靠兜底）
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.3)
+        except Exception:
+            pass
+
         input_el = page.locator(self.INPUT_SELECTOR).first
         await input_el.wait_for(state="visible", timeout=10000)
-        await input_el.click()
+        await input_el.click(force=True)  # force：避免被残留遮罩拦截
         await asyncio.sleep(0.3)
 
         # 统一用 keyboard.type() 模拟真实键盘输入。
@@ -1326,46 +1348,25 @@ class DoubaoWebChatClient(WebChatClientBase):
     async def _extract_response(self, page: Page) -> str:
         """提取豆包响应文本，包括引用链接和搜索元数据
 
-        优先用 RESPONSE_SELECTOR 定位响应区域提取文本和链接，
-        回退到 TreeWalker 提取可见文本。
-        同时提取搜索元数据（关键词数、参考资料数）。
+        豆包的联网搜索引用源是页面下方「搜索N个关键词，参考X篇资料」折叠卡片
+        里的 `<a href>`（每篇资料一个链接，标题+URL），不在主回答气泡内。
+        证据（diag_doubao_refs.py 采集）：这些链接共同祖先为
+        `div.container-SIvZXF ... > a.flex-row.max-w-full.min-w-0`，
+        无 iframe / shadow DOM，且页面默认就渲染了（不用点展开也能抓到）。
+        故这里锚定该卡片容器取链接，避免把页脚/导航当引用（Kimi 式假阳性）。
         """
         text = ""
         links = []
 
-        # 1) 尝试用 RESPONSE_SELECTOR 定位响应区域
+        # 1) 尝试用 RESPONSE_SELECTOR 定位响应区域取正文
         try:
             response_area = page.locator(self.RESPONSE_SELECTOR).last
             await response_area.wait_for(state="visible", timeout=5000)
             text = await response_area.inner_text()
-
-            # 提取响应区域内的 <a href> 链接
-            links = await response_area.evaluate("""
-                el => {
-                    const links = el.querySelectorAll('a[href]');
-                    return Array.from(links).map(a => ({
-                        text: a.textContent.trim(),
-                        href: a.href
-                    }));
-                }
-            """)
-            logger.info(f"WebChat doubao: extracted {len(text)} chars via RESPONSE_SELECTOR, {len(links)} links")
+            logger.info(f"WebChat doubao: extracted {len(text)} chars via RESPONSE_SELECTOR")
         except Exception:
-            # 2) 回退：TreeWalker 提取可见文本
+            # 回退：TreeWalker 提取可见文本（排除 UI chrome）
             logger.info("WebChat doubao: RESPONSE_SELECTOR failed, falling back to TreeWalker")
-
-            # 同时从整个页面提取链接作为补充
-            try:
-                links = await page.evaluate("""() => {
-                    const links = document.querySelectorAll('a[href]');
-                    return Array.from(links).map(a => ({
-                        text: a.textContent.trim(),
-                        href: a.href
-                    }));
-                }""")
-            except Exception:
-                links = []
-
             text = await page.evaluate("""() => {
                 const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
                 const walker = document.createTreeWalker(
@@ -1393,7 +1394,14 @@ class DoubaoWebChatClient(WebChatClientBase):
                 return texts.join('\\n').trim();
             }""")
             if text:
-                logger.info(f"WebChat doubao: extracted {len(text)} chars via TreeWalker fallback, {len(links)} links")
+                logger.info(f"WebChat doubao: extracted {len(text)} chars via TreeWalker fallback")
+
+        # 2) 锚定「搜索/参考」资料卡片容器取引用链接
+        #    卡片标题元素形如 <div ...>搜索N个关键词，参考X篇资料</div>，
+        #    其后的同辈/祖先链 div.container-SIvZXF 内含若干 <a href>（每篇资料一条）。
+        #    这里用 JS：找到含「参考...篇资料」文本的容器，从其最近公共祖先里取 <a href>。
+        links = await self._extract_doubao_reference_links(page)
+        logger.info(f"WebChat doubao: reference links extracted: {len(links)}")
 
         # 3) 提取搜索元数据（关键词数、参考资料数）
         try:
@@ -1417,7 +1425,7 @@ class DoubaoWebChatClient(WebChatClientBase):
         except Exception:
             pass
 
-        # 4) 将链接追加到文本末尾
+        # 4) 将引用链接追加到文本末尾（analyzer 通用 URL 正则会自动收录进 all_cited_urls/citations）
         if links:
             citation_lines = []
             for i, link in enumerate(links):
@@ -1435,7 +1443,101 @@ class DoubaoWebChatClient(WebChatClientBase):
                 text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
 
         return text or ""
-        return text or ""
+
+    async def _extract_doubao_reference_links(self, page: Page) -> list:
+        """锚定豆包「搜索/参考」资料卡片，取其中的引用 <a href>。
+
+        策略（按证据 diag_doubao_refs.py 采集到的真实 DOM）：
+        1) 找到文本含「参考」+「篇」+「资料/来源/文献/文章」的元素（卡片标题），
+           它通常在一个带 cursor-pointer 的折叠触发器里；点开它确保卡片内容已渲染。
+        2) 从该标题元素向上找一个含多个 <a href> 的祖先容器（资料列表），
+           或就近的 div.container-* / 同级滚动区，取其下所有 <a href>。
+        3) 若点开/定位不到（DOM 改版），回退为「取页面所有 <a href> 中、
+           其容器路径含 message-list / container-SIvZXF 的」——仍限定在回答区，
+           不取页脚/导航，避免假阳性。
+        全程 best-effort，任何异常返回 []（宁缺毋滥，不灌页脚链接当引用）。
+        """
+        try:
+            # 先点开折叠的「参考资料」触发器（带箭头 svg 的 cursor-pointer 容器）
+            try:
+                triggers = await page.evaluate("""() => {
+                  const out = [];
+                  const cand = document.querySelectorAll(
+                    'div.cursor-pointer, [class*="reference"], [class*="source"], details, summary'
+                  );
+                  for (const el of cand) {
+                    const t = (el.textContent || '').trim();
+                    if (t.includes('参考') && (t.includes('篇') || t.includes('资料') || t.includes('来源'))) {
+                      out.push({ idx: out.length, text: t.slice(0, 40) });
+                    }
+                  }
+                  return out;
+                }""")
+                for t in (triggers or [])[:4]:
+                    # 用文本定位回元素再点击（避免 selector 复杂）
+                    try:
+                        loc = page.get_by_text(t["text"], exact=False).first
+                        if await loc.is_visible(timeout=1500):
+                            await loc.click(timeout=3000)
+                            await asyncio.sleep(0.6)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"WebChat doubao: 展开参考资料触发器失败(可忽略): {e}")
+
+            # 取参考资料卡片内的链接
+            links = await page.evaluate("""() => {
+              const REF_RE = /参考(?:了)?\\s*\\d+\\s*篇\\s*(?:资料|来源|文献|文章)/;
+              // 1) 找标题元素
+              const all = Array.from(document.querySelectorAll('div, span, button, summary'));
+              let titleEl = null;
+              for (const el of all) {
+                const t = (el.textContent || '').trim();
+                if (REF_RE.test(t) && t.length < 60) { titleEl = el; break; }
+              }
+              const candRoots = [];
+              if (titleEl) {
+                // 向上找含多个 a[href] 的祖先
+                let p = titleEl;
+                let guard = 0;
+                while (p && guard < 10) {
+                  const cnt = p.querySelectorAll('a[href]').length;
+                  if (cnt >= 1) { candRoots.push(p); }
+                  if (cnt >= 2) break;  // 找到链接密集容器即可
+                  p = p.parentElement;
+                  guard++;
+                }
+                // 也把标题元素的下一个兄弟节点链纳入（折叠内容常在兄弟节点）
+                let sib = titleEl.parentElement;
+                if (sib) candRoots.push(sib);
+              }
+              // 2) 兜底：回答消息区内所有 a[href]
+              const msgList = document.querySelector('[class*="message-list"], [class*="container-SIvZXF"]');
+              if (msgList) candRoots.push(msgList);
+
+              const seen = new Set();
+              const out = [];
+              const collect = (root) => {
+                if (!root) return;
+                const as = root.querySelectorAll('a[href]');
+                for (const a of as) {
+                  const href = a.href || '';
+                  if (!href || href.startsWith('javascript:') || href.startsWith('#')) continue;
+                  if (href.startsWith('http') === false) continue;
+                  if (seen.has(href)) continue;
+                  // 排除豆包自身站内跳转
+                  if ((href.includes('doubao.com') && href.includes('/chat')) || href.includes('bytedance.com')) continue;
+                  seen.add(href);
+                  out.push({ text: (a.textContent || '').trim().slice(0, 200), href });
+                }
+              };
+              for (const r of candRoots) collect(r);
+              return out;
+            }""")
+            return links or []
+        except Exception as e:
+            logger.warning(f"WebChat doubao: 提取参考资料链接失败: {e}")
+            return []
 
     async def _start_new_chat(self, page: Page):
         """开始新对话"""

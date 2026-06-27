@@ -92,8 +92,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 from web_chat_clients import create_web_chat_client
 from analyzer import ResponseAnalyzer
+from analyzer import AnalysisResult, CitationInfo
 from metrics import MetricsCalculator
-from analyzer import AnalysisResult
 from brand_profile import BrandProfile, default_brand_profile
 from database import get_questions as db_get_questions
 from scheduler import EvalScheduler
@@ -175,8 +175,13 @@ def _scores_to_dict(s) -> Dict:
 
 
 def _dict_to_analysis(d: Dict):
-    """dict → AnalysisResult (与 eval_runner._dict_to_analysis 一致)"""
-    return AnalysisResult(
+    """dict → AnalysisResult (与 eval_runner._dict_to_analysis 一致)
+
+    若字典带 citations/all_cited_urls 明细，则回填到 AnalysisResult，
+    使 metrics._has_effective_citation() 能按口径判出有效引用
+    （运行期已存明细时优先用明细，避免重算时因 raw_content 重组而漏判）。
+    """
+    r = AnalysisResult(
         question_id=d["question_id"],
         model_key=d["model_key"],
         model_name=d["model_name"],
@@ -193,6 +198,25 @@ def _dict_to_analysis(d: Dict):
         response_length=d["response_length"],
         raw_content=d.get("raw_content", ""),
     )
+    for c in d.get("citations") or []:
+        if isinstance(c, dict):
+            r.citations.append(CitationInfo(
+                citation_type=c.get("citation_type", "url"),
+                content=c.get("content", ""),
+                position=c.get("position", 0),
+                source_channel=c.get("source_channel", ""),
+                is_ucloud=bool(c.get("is_ucloud", False)),
+            ))
+    for u in d.get("all_cited_urls") or []:
+        if isinstance(u, dict):
+            r.all_cited_urls.append(CitationInfo(
+                citation_type=u.get("citation_type", "url"),
+                content=u.get("content", ""),
+                position=u.get("position", 0),
+                source_channel=u.get("source_channel", ""),
+                is_ucloud=bool(u.get("is_ucloud", False)),
+            ))
+    return r
 
 
 # ── 主逻辑 ──

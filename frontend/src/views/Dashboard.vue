@@ -539,7 +539,10 @@ async function openDrilldown(modelKey) {
   drilldownLoading.value = true
 
   try {
-    const taskId = route.query.task_id
+    // taskId 优先取 query（从 TaskList「查看结果」带进来），否则取 loadData 自动选中的任务
+    // （直接进仪表盘无 query 时 selectedTaskId 才是真实展示的任务；不能用 latestRun.id，
+    //  那是任务 id 当 run_id 用会 404「评测不存在」）
+    const taskId = route.query.task_id || selectedTaskId.value
     const runId = latestRun.value?.id
     if (!taskId && !runId) return
     // task 模式：按大任务聚合（跨批次去重），run_id 传 0 占位 + task_id 参数

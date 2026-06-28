@@ -186,28 +186,27 @@ async def generate_questions(brand_name: str, company_name: str = "", website: s
 
 async def generate_and_replace(brand_name: str, company_name: str = "", website: str = "",
                                industry: str = "", model_key: str = "deepseek",
-                               scenario_count: Optional[int] = None) -> Dict:
-    """生成题集 → 替换当前激活题集 → 同步品牌档案。返回汇总信息。"""
+                               scenario_count: Optional[int] = None,
+                               brand_id: str = None) -> Dict:
+    """生成题集 → 替换该品牌激活题集 → 同步该品牌档案。brand_id 默认 current。"""
+    if brand_id is None:
+        brand_id = await db.get_current_brand_id()
     result = await generate_questions(brand_name, company_name, website, industry, model_key, scenario_count)
 
-    # 1. 同步品牌档案（分析口径必须与题集品牌一致）
+    # 1. 同步该品牌档案（分析口径与题集品牌一致）
     profile = derive_from_input(brand_name, company_name, website, industry)
-    await db.save_brand_profile(profile)
+    await db.update_brand(brand_id, profile)
 
-    # 2. 清场 + 写入新题（按场景顺序分配 gen_001..）
-    await db.deactivate_all_questions()
+    # 2. 清场（仅该品牌）+ 写入新题
+    await db.deactivate_all_questions(brand_id=brand_id)
     idx = 0
     for it in result["questions"]:
         idx += 1
-        qid = f"gen_{idx:03d}"
+        qid = f"{brand_id}_{idx:03d}"  # 带 brand 前缀避免跨品牌 id 冲突
         await db.upsert_question({
-            "id": qid,
-            "category": it["category"],
-            "question_type": it["question_type"],
-            "question": it["question"],
-            "tags": it["tags"],
-            "difficulty": "medium",
-        })
+            "id": qid, "category": it["category"], "question_type": it["question_type"],
+            "question": it["question"], "tags": it["tags"], "difficulty": "medium",
+        }, brand_id=brand_id)
 
     return {
         "generated": len(result["questions"]),
@@ -217,4 +216,5 @@ async def generate_and_replace(brand_name: str, company_name: str = "", website:
         "model_key": result["model_key"],
         "model_name": result["model_name"],
         "brand_profile": profile.to_dict(),
+        "brand_id": brand_id,
     }

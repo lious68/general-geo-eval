@@ -172,26 +172,24 @@ async def update_weights(req: models.WeightsUpdate, user=Depends(require_admin))
 
 @router.get("/brand-profile")
 async def get_brand_profile():
-    """获取当前被测品牌档案（未设置时返回空 + UCloud 默认档案作参考）。"""
-    saved = await db.get_setting("brand_profile", "")
-    if saved:
-        try:
-            profile = json.loads(saved)
-            return {"success": True, "data": {"configured": True, **profile}}
-        except (ValueError, TypeError):
-            pass
-    return {"success": True, "data": {"configured": False, **default_brand_profile().to_dict()}}
+    """兜底：返回当前品牌档案（兼容旧前端）。新前端用 /api/brands/current。"""
+    bid = await db.get_current_brand_id()
+    b = await db.get_brand(bid)
+    if not b:
+        return {"success": True, "data": {"configured": False, **default_brand_profile().to_dict()}}
+    return {"success": True, "data": {"configured": True, **b["brand_profile"]}}
 
 
 @router.put("/brand-profile")
 async def update_brand_profile(req: models.BrandProfileUpdate, user=Depends(require_admin)):
-    """设置被测品牌档案：根据品牌/公司/官网/行业自动派生关键词、官方域名、引用规则。"""
+    """兜底：更新当前品牌档案。新前端用 PUT /api/brands/{id}。"""
     if not req.brand_name.strip():
         raise HTTPException(400, "品牌名不能为空")
     profile = derive_from_input(req.brand_name, req.company_name, req.website, req.industry)
-    await db.save_brand_profile(profile)
-    return {
-        "success": True,
-        "data": profile.to_dict(),
-        "message": f"已设置品牌档案：{profile.brand_name}（{profile.industry or '未填行业'}）",
-    }
+    bid = await db.get_current_brand_id()
+    if not await db.get_brand(bid):
+        await db.create_brand(bid, profile)  # 兜底新建
+    else:
+        await db.update_brand(bid, profile)
+    return {"success": True, "data": profile.to_dict(),
+            "message": f"已更新当前品牌档案：{profile.brand_name}（{profile.industry or '未填行业'}）"}

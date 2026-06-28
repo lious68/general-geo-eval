@@ -18,9 +18,9 @@ from question_generator import generate_and_replace
 
 @router.get("")
 async def list_questions(category: str = None, question_type: str = None,
-                         active_only: bool = True):
-    """列出问题"""
-    questions = await db.get_questions(category, question_type, active_only)
+                         active_only: bool = True, brand_id: str = None):
+    """列出问题。brand_id 默认 current。"""
+    questions = await db.get_questions(category, question_type, active_only, brand_id=brand_id)
     for q in questions:
         try:
             q["tags"] = json.loads(q["tags"]) if isinstance(q["tags"], str) else q["tags"]
@@ -46,7 +46,7 @@ async def list_types():
 
 @router.post("")
 async def create_question(q: models.QuestionCreate, user=Depends(require_admin)):
-    """新增问题"""
+    """新增问题（归属当前品牌）"""
     await db.upsert_question(q.dict())
     return {"success": True}
 
@@ -95,6 +95,7 @@ async def generate_questions(req: models.QuestionGenerate, user=Depends(require_
             industry=req.industry,
             model_key=req.model_key,
             scenario_count=req.scenario_count,
+            brand_id=req.brand_id,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

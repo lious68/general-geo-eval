@@ -161,32 +161,63 @@ class WinDaemon:
     def _notify(self, msg: str, title: str = "WebChat 批次通知"):
         """Windows 桌面弹窗：屏幕中央置顶信息框，比右下角 toast 醒目。
 
-        用 PowerShell + Windows.Forms MessageBox 弹 SystemModal 信息框：
-          - SystemModal：置顶所有窗口（MB_TOPMOST | MB_SYSTEMMODAL）
-          - MessageBox 自带屏幕居中
-          - 模态阻塞：用户必须点确定才消失，不会一闪而过
-        msg.exe 在多会话/Server 上常弹在右下角且无标题，容易漏看，故改此法。
-        非 Win 环境仅记日志。PowerShell 启动失败回退 msg.exe。
+        实测：MessageBox::Show 即便带 ServiceNotification 仍在 Server/多会话下
+        弹在右下角，不可见。改用自建 WinForms Form + ShowDialog：
+          - StartPosition=CenterScreen → 屏幕正中央
+          - TopMost=true → 置顶所有窗口
+          - 模态（ShowDialog）：用户必须点确定才消失
+        msg.exe 同样弹右下角，已弃用。非 Win 环境仅记日志。
         """
         logger.info(f"[通知] {msg}")
         if sys.platform != "win32":
             return
-        # PowerShell 单引号 here-string 内不转义 $/backtick，msg 里的单引号需翻倍
-        msg_ps = msg.replace("'", "''")
+        # PowerShell 单引号 here-string 内不转义 $/反引号；文本里的单引号翻倍
+        msg_ps = msg.replace("'", "''").replace("\n", "`r`n")
         title_ps = title.replace("'", "''")
+        # 16px 字号、橙底深棕字、底部居中蓝色按钮；GenericSansSerif 兜底（中文字体名
+        # 在 Server 上用 New-Object 构造 Font 会因程序集名解析报错，故用 GenericSansSerif，
+        # Windows 会自动用它回退渲染 CJK，显示正常）
         ps_script = (
             "Add-Type -AssemblyName System.Windows.Forms;"
-            "[System.Windows.Forms.MessageBox]::Show("
-            f"'{msg_ps}', '{title_ps}',"
-            " [System.Windows.Forms.MessageBoxButtons]::OK,"
-            " [System.Windows.Forms.MessageBoxIcon]::Warning,"
-            " [System.Windows.Forms.MessageBoxDefaultButton]::Button1,"
-            " [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly -bor"
-            " [System.Windows.Forms.MessageBoxOptions]::ServiceNotification"
-            ")"
+            "Add-Type -AssemblyName System.Drawing;"
+            "$f = New-Object System.Windows.Forms.Form;"
+            f"$f.Text = '{title_ps}';"
+            "$f.StartPosition = 'CenterScreen';"
+            "$f.TopMost = $true;"
+            "$f.FormBorderStyle = 'FixedDialog';"
+            "$f.ControlBox = $false;"
+            "$f.MaximizeBox = $false;"
+            "$f.MinimizeBox = $false;"
+            "$f.BackColor = [System.Drawing.Color]::FromArgb(255,255,245,230);"
+            "$f.Width = 480;"
+            "$f.Height = 230;"
+            "$lbl = New-Object System.Windows.Forms.Label;"
+            f"$lbl.Text = '{msg_ps}';"
+            "$lbl.AutoSize = $true;"
+            "$lbl.Location = New-Object System.Drawing.Point(30, 30);"
+            "$ff = [System.Drawing.FontFamily]::GenericSansSerif;"
+            "$lbl.Font = New-Object System.Drawing.Font($ff, 14.0, [System.Drawing.FontStyle]::Bold);"
+            "$lbl.ForeColor = [System.Drawing.Color]::FromArgb(255,146,64,14);"
+            "$f.Controls.Add($lbl);"
+            "$btn = New-Object System.Windows.Forms.Button;"
+            "$btn.Text = '知道了';"
+            "$btn.Width = 130;"
+            "$btn.Height = 42;"
+            "$btn.Font = New-Object System.Drawing.Font($ff, 12.0);"
+            "$btn.BackColor = [System.Drawing.Color]::FromArgb(255,37,99,235);"
+            "$btn.ForeColor = [System.Drawing.Color]::White;"
+            "$btn.FlatStyle = 'Flat';"
+            "$btn.FlatAppearance.BorderSize = 0;"
+            "$btn.Location = New-Object System.Drawing.Point([int](($f.Width - $btn.Width)/2), 145);"
+            "$btn.Add_Click({ $f.Close() });"
+            "$f.Controls.Add($btn);"
+            "$f.ShowDialog() | Out-Null"
         )
         try:
             import subprocess
+            # 阻塞 Popen：守护进程调用 _notify 时本就在等用户在场确认，弹窗模态显示
+            # 期间阻塞当前协程线程是可接受的（await wait_for_user_start 之后才弹 import 等）。
+            # 用 Popen 不等结果，避免 daemon 主循环卡死；窗口在独立 PS 进程里显示。
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                  "-Command", ps_script],
@@ -199,6 +230,7 @@ class WinDaemon:
                 subprocess.Popen(["msg", "*", "/TIME:120", f"{title}: {msg}"], shell=False)
             except Exception:
                 pass
+
 
 
     async def probe_logins(self, model_keys: list) -> dict:

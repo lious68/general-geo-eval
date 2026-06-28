@@ -853,6 +853,102 @@ async def save_brand_profile(profile: BrandProfile, brand_id: str = None):
     _BRAND_PROFILE_CACHE[bid] = profile
 
 
+# ============ 品牌库（多品牌） ============
+
+async def list_brands() -> List[Dict]:
+    """列出所有 active 品牌，含题集数/任务数摘要。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT b.id, b.brand_name, b.company_name, b.website, b.industry, "
+            "b.created_at, b.is_active, "
+            "(SELECT COUNT(*) FROM questions WHERE brand_id=b.id AND is_active=1) AS question_count, "
+            "(SELECT COUNT(*) FROM tasks WHERE brand_id=b.id AND status='active') AS task_count "
+            "FROM brands b WHERE b.is_active=1 ORDER BY b.created_at ASC"
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_brand(brand_id: str) -> Optional[Dict]:
+    """取单品牌（含 brand_profile dict）。仅返回 active。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM brands WHERE id=? AND is_active=1", (brand_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        b = dict(row)
+        try:
+            b["brand_profile"] = json.loads(b["brand_profile_json"])
+        except (ValueError, TypeError):
+            b["brand_profile"] = {}
+        return b
+    finally:
+        await db.close()
+
+
+async def create_brand(brand_id: str, profile: BrandProfile) -> Dict:
+    """新建品牌。id 冲突抛 ValueError。"""
+    db = await get_db()
+    try:
+        existing = await db.execute("SELECT 1 FROM brands WHERE id=?", (brand_id,))
+        if await existing.fetchone():
+            raise ValueError(f"品牌 id '{brand_id}' 已存在")
+        await db.execute(
+            "INSERT INTO brands (id, brand_name, company_name, website, industry, brand_profile_json, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            (brand_id, profile.brand_name, profile.company_name,
+             profile.website, profile.industry, profile.to_json())
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    _BRAND_PROFILE_CACHE[brand_id] = profile
+    return {"id": brand_id, "brand_name": profile.brand_name,
+            "company_name": profile.company_name, "website": profile.website,
+            "industry": profile.industry}
+
+
+async def update_brand(brand_id: str, profile: BrandProfile):
+    """更新品牌档案（重新 derive 后调用）。"""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE brands SET brand_name=?, company_name=?, website=?, industry=?, brand_profile_json=? "
+            "WHERE id=?",
+            (profile.brand_name, profile.company_name, profile.website,
+             profile.industry, profile.to_json(), brand_id)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    _BRAND_PROFILE_CACHE[brand_id] = profile
+
+
+async def delete_brand(brand_id: str):
+    """软删品牌（is_active=0）。若有活跃题集/任务，抛 ValueError 提示先清空。
+    ucloud 不可删。"""
+    if brand_id == "ucloud":
+        raise ValueError("ucloud 为预置默认品牌，不可删除")
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT 1 FROM questions WHERE brand_id=? AND is_active=1 LIMIT 1", (brand_id,))
+        if await cur.fetchone():
+            raise ValueError(f"品牌 '{brand_id}' 仍有活跃题集，请先清空题集再删")
+        cur = await db.execute("SELECT 1 FROM tasks WHERE brand_id=? AND status='active' LIMIT 1", (brand_id,))
+        if await cur.fetchone():
+            raise ValueError(f"品牌 '{brand_id}' 仍有活跃任务，请先删除任务再删")
+        await db.execute("UPDATE brands SET is_active=0 WHERE id=?", (brand_id,))
+        await db.commit()
+    finally:
+        await db.close()
+    _BRAND_PROFILE_CACHE.pop(brand_id, None)
+
+
 # ============ 设置 ============
 
 async def get_setting(key: str, default: str = None) -> Optional[str]:

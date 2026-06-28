@@ -139,7 +139,7 @@ function applyRange(row) {
 function selectAll(row) { row.question_ids = [...poolQids(row)] }
 function addRow() { batchRows.value.push(new_row()) }
 
-async function downloadBatch() {
+async function submitBatch() {
   const rows = batchRows.value.filter(r => r.model_key)
   if (!rows.length) return ElMessage.warning('请至少添加一个模型')
   const per_model = {}

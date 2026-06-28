@@ -114,7 +114,11 @@ async function onSave() {
 }
 
 async function onDel(row) {
-  await ElMessageBox.confirm(`确定删除品牌「${row.brand_name}」？需先清空其题集与任务。`, '删除', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确定删除品牌「${row.brand_name}」？需先清空其题集与任务。`, '删除', { type: 'warning' })
+  } catch {
+    return  // 用户取消
+  }
   try {
     await deleteBrand(row.id)
     ElMessage.success('已删除')

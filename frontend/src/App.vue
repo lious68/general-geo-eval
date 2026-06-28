@@ -20,7 +20,7 @@
       <el-menu :default-active="currentRoute" router class="sidebar-menu">
         <el-menu-item index="/">
           <el-icon><Aim /></el-icon>
-          <span>品牌设置</span>
+          <span>品牌管理</span>
         </el-menu-item>
         <el-menu-item index="/dashboard">
           <el-icon><DataAnalysis /></el-icon>

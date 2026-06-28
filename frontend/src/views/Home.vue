@@ -1,75 +1,59 @@
 <template>
   <div class="home">
-    <h2 class="page-title"><el-icon><Aim /></el-icon> 品牌设置</h2>
-
+    <h2 class="page-title"><el-icon><Aim /></el-icon> 品牌管理</h2>
     <el-card v-loading="loading">
-      <template #header>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <strong><el-icon><OfficeBuilding /></el-icon> 被测品牌档案</strong>
-          <el-tag v-if="configured" type="success" size="small">已设置</el-tag>
-          <el-tag v-else type="danger" size="small">未设置</el-tag>
-        </div>
-      </template>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-weight:600">被测品牌列表（点「设为当前」切换评测空间）</span>
+        <el-button v-if="isAdmin()" type="primary" @click="openCreate"><el-icon><Plus /></el-icon> 新建品牌</el-button>
+      </div>
+      <el-table :data="brands" stripe>
+        <el-table-column prop="brand_name" label="品牌名" min-width="120" />
+        <el-table-column prop="company_name" label="公司名" min-width="120" />
+        <el-table-column prop="industry" label="行业" width="100" />
+        <el-table-column prop="website" label="官网" min-width="180" />
+        <el-table-column label="题集数" width="80">
+          <template #default="{ row }">{{ row.question_count || 0 }}</template>
+        </el-table-column>
+        <el-table-column label="任务数" width="80">
+          <template #default="{ row }">{{ row.task_count || 0 }}</template>
+        </el-table-column>
+        <el-table-column label="当前" width="80">
+          <template #default="{ row }">
+            <el-tag v-if="row.id === currentId" type="success" size="small">当前</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="240">
+          <template #default="{ row }">
+            <el-button size="small" :disabled="row.id === currentId" @click="onSetCurrent(row)">设为当前</el-button>
+            <el-button v-if="isAdmin()" size="small" link type="primary" @click="openEdit(row)">编辑档案</el-button>
+            <el-button v-if="isAdmin() && row.id !== 'ucloud'" size="small" link type="danger" @click="onDel(row)">删</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
 
-      <el-alert v-if="!configured" type="warning" :closable="false" style="margin-bottom:16px">
-        尚未设置被测品牌。请先填写<strong>品牌名</strong>与<strong>网站</strong>（必选），系统会据此生成题集并让评测指标对该品牌生效。
-      </el-alert>
-
-      <el-form :model="form" label-width="100px" style="max-width:640px">
+    <!-- 新建/编辑品牌对话框 -->
+    <el-dialog v-model="dialog" :title="editing ? '编辑品牌档案' : '新建品牌'" width="520px">
+      <el-form :model="form" label-width="90px">
+        <el-form-item label="品牌ID" v-if="!editing">
+          <el-input v-model="form.brand_id" placeholder="如 acme（小写英文，留空则按品牌名生成）" />
+        </el-form-item>
         <el-form-item label="品牌名" required>
           <el-input v-model="form.brand_name" placeholder="如 UCloud、Acme云" />
         </el-form-item>
         <el-form-item label="公司名">
-          <el-input v-model="form.company_name" placeholder="如 优刻得、阿克米科技（可选，用于更全的品牌匹配）" />
-        </el-form-item>
-        <el-form-item label="网站" required>
-          <el-input v-model="form.website" placeholder="如 https://www.ucloud.cn" />
-        </el-form-item>
-        <el-form-item label="行业">
-          <el-input v-model="form.industry" placeholder="如 云计算、新能源汽车、在线教育（用于按行业生成题集）" />
-        </el-form-item>
-      </el-form>
-
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <el-button type="primary" :loading="saving" @click="save">
-          <el-icon><Check /></el-icon> 保存品牌档案
-        </el-button>
-        <el-button type="success" :disabled="!configured" @click="goGenerate">
-          <el-icon><MagicStick /></el-icon> 去生成问题题集
-        </el-button>
-      </div>
-
-      <!-- 派生信息预览 -->
-      <el-descriptions v-if="profile" :column="1" border size="small" style="margin-top:20px" title="自动派生（保存后生效）">
-        <el-descriptions-item label="官方域名">{{ (profile.official_domains || []).join('、') || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="品牌关键词">{{ brandKeywordPreview }}</el-descriptions-item>
-        <el-descriptions-item label="引用参考词">{{ (profile.reference_keywords || []).slice(0, 6).join('、') || '—' }}</el-descriptions-item>
-      </el-descriptions>
-    </el-card>
-
-    <!-- 必填对话框：未设置品牌时强制弹出，不可关闭 -->
-    <el-dialog v-model="requiredDialog" title="请先设置被测品牌" width="460px"
-      :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false"
-      :align-center="true">
-      <el-alert type="info" :closable="false" style="margin-bottom:12px">
-        检测到尚未设置被测品牌。<strong>品牌名</strong>与<strong>网站</strong>为必选项，填写后方可继续使用评测系统。
-      </el-alert>
-      <el-form :model="form" label-width="80px">
-        <el-form-item label="品牌名" required>
-          <el-input v-model="form.brand_name" placeholder="如 UCloud" />
-        </el-form-item>
-        <el-form-item label="网站" required>
-          <el-input v-model="form.website" placeholder="如 https://www.ucloud.cn" />
-        </el-form-item>
-        <el-form-item label="公司名">
           <el-input v-model="form.company_name" placeholder="可选" />
+        </el-form-item>
+        <el-form-item label="网站" required>
+          <el-input v-model="form.website" placeholder="如 https://www.ucloud.cn" />
         </el-form-item>
         <el-form-item label="行业">
           <el-input v-model="form.industry" placeholder="如 云计算" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button type="primary" :loading="saving" @click="saveFromDialog">保存并继续</el-button>
+        <el-button @click="dialog=false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="onSave">{{ editing ? '保存' : '创建' }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -77,88 +61,70 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { apiFetch } from '../composables/useWebSocket'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { isAdmin } from '../composables/useWebSocket'
+import { useCurrentBrand } from '../composables/useCurrentBrand'
+import { createBrand, updateBrand, deleteBrand } from '../api/brands'
 
-const router = useRouter()
-const loading = ref(true)
+const { brands, currentBrand, loading, refresh, setCurrent } = useCurrentBrand()
+const currentId = computed(() => currentBrand.value?.id || '')
+const dialog = ref(false)
+const editing = ref(null)
 const saving = ref(false)
-const configured = ref(false)
-const profile = ref(null)
-const requiredDialog = ref(false)
-const form = ref({ brand_name: '', company_name: '', website: '', industry: '' })
+const form = ref({ brand_id: '', brand_name: '', company_name: '', website: '', industry: '' })
 
-const brandKeywordPreview = computed(() => {
-  const kw = profile.value?.keywords || {}
-  return [...(kw.primary || []), ...(kw.aliases || [])].slice(0, 8).join('、') || '—'
-})
-
-async function loadProfile() {
-  loading.value = true
-  try {
-    const res = await apiFetch('/settings/brand-profile')
-    const d = res.data || {}
-    configured.value = !!d.configured
-    profile.value = d
-    form.value = {
-      brand_name: d.brand_name || '',
-      company_name: d.company_name || '',
-      website: d.website || '',
-      industry: d.industry || '',
-    }
-    // 未设置品牌 → 强制弹必填对话框
-    if (!configured.value) {
-      requiredDialog.value = true
-    }
-  } catch (e) {
-    ElMessage.error(e.message)
-  } finally {
-    loading.value = false
-  }
+async function onSetCurrent(row) {
+  await setCurrent(row.id)
+  ElMessage.success(`已切换到品牌「${row.brand_name}」`)
 }
 
-async function save() {
+function openCreate() {
+  editing.value = null
+  form.value = { brand_id: '', brand_name: '', company_name: '', website: '', industry: '' }
+  dialog.value = true
+}
+
+function openEdit(row) {
+  editing.value = row
+  form.value = { brand_id: row.id, brand_name: row.brand_name, company_name: row.company_name, website: row.website, industry: row.industry }
+  dialog.value = true
+}
+
+async function onSave() {
   if (!form.value.brand_name.trim() || !form.value.website.trim()) {
-    ElMessage.warning('品牌名和网站为必选项')
+    ElMessage.warning('品牌名和网站为必填')
     return
   }
-  await doSave()
-}
-
-async function saveFromDialog() {
-  if (!form.value.brand_name.trim() || !form.value.website.trim()) {
-    ElMessage.warning('品牌名和网站为必选项，请填写后再继续')
-    return
-  }
-  const ok = await doSave()
-  if (ok) requiredDialog.value = false
-}
-
-async function doSave() {
   saving.value = true
   try {
-    const res = await apiFetch('/settings/brand-profile', {
-      method: 'PUT',
-      body: JSON.stringify(form.value),
-    })
-    ElMessage.success(res.message || '品牌档案已保存')
-    configured.value = true
-    profile.value = res.data
-    return true
+    if (editing.value) {
+      await updateBrand(editing.value.id, form.value)
+      ElMessage.success('品牌档案已更新')
+    } else {
+      await createBrand(form.value)
+      ElMessage.success('品牌已创建')
+    }
+    dialog.value = false
+    await refresh()
   } catch (e) {
-    ElMessage.error(e.message)
-    return false
+    ElMessage.error(e.message || e)
   } finally {
     saving.value = false
   }
 }
 
-function goGenerate() {
-  router.push('/questions')
+async function onDel(row) {
+  await ElMessageBox.confirm(`确定删除品牌「${row.brand_name}」？需先清空其题集与任务。`, '删除', { type: 'warning' })
+  try {
+    await deleteBrand(row.id)
+    ElMessage.success('已删除')
+    await refresh()
+  } catch (e) {
+    ElMessage.error(e.message || e)
+  }
 }
 
-onMounted(loadProfile)
+onMounted(refresh)
 </script>
 
 <style scoped>

@@ -26,7 +26,6 @@ PROTECTED_PREFIXES = [
     "/api/webchat/auth",
     "/api/tasks",
     "/api/batches",
-    "/api/brands",
 ]
 # 不需要鉴权的路径
 PUBLIC_PATHS = [

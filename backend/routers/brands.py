@@ -1,4 +1,5 @@
 """品牌库路由：多品牌 CRUD + 当前品牌切换。"""
+import re
 import sys
 import os
 from fastapi import APIRouter, HTTPException, Depends
@@ -14,7 +15,6 @@ router = APIRouter(prefix="/api/brands", tags=["brands"])
 
 def _slugify(s: str) -> str:
     """品牌名 → slug：小写、非字母数字下划线转下划线。"""
-    import re
     s = (s or "").strip().lower()
     s = re.sub(r"[^\w]+", "_", s, flags=re.UNICODE)
     return s.strip("_") or "brand"
@@ -28,9 +28,9 @@ async def list_brands():
 
 @router.post("")
 async def create_brand(req: models.BrandCreate, user=Depends(require_admin)):
-    brand_id = req.brand_id or _slugify(req.brand_name)
     if not req.brand_name.strip():
         raise HTTPException(400, "品牌名不能为空")
+    brand_id = req.brand_id or _slugify(req.brand_name)
     profile = derive_from_input(req.brand_name, req.company_name, req.website, req.industry)
     try:
         created = await db.create_brand(brand_id, profile)
@@ -76,7 +76,7 @@ async def update_brand(brand_id: str, req: models.BrandUpdate, user=Depends(requ
     if not await db.get_brand(brand_id):
         raise HTTPException(404, "品牌不存在")
     await db.update_brand(brand_id, profile)
-    return {"success": True, "data": {"id": brand_id, **profile.to_dict()},
+    return {"success": True, "data": await db.get_brand(brand_id),
             "message": f"已更新品牌「{profile.brand_name}」"}
 
 

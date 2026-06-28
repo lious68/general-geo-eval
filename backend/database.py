@@ -20,33 +20,72 @@ from brand_profile import (
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "geo.db")
 
-# 当前被测品牌档案缓存（init_db 时加载，brand-profile 设置时刷新）。
-# sync 辅助函数（is_natural_question / is_ucloud_related_citation 等）直接读缓存，
-# 避免在 async 上下文的同步循环里反复 await 读设置。
-_BRAND_PROFILE_CACHE: Optional[BrandProfile] = None
+# 多品牌：按 brand_id 缓存档案；current_brand_id 指向当前选中品牌。
+_BRAND_PROFILE_CACHE: Dict[str, BrandProfile] = {}
 
 
 def _active_brand_profile() -> BrandProfile:
-    """获取当前被测品牌档案（缓存未就绪时 fallback UCloud 默认）。"""
-    return _BRAND_PROFILE_CACHE or default_brand_profile()
+    """同步辅助：返回 current 品牌档案（缓存未就绪时 fallback UCloud 默认）。
+    仅供不能 await 的同步循环（如 is_ucloud_related_citation）兜底用，
+    主路径请用 get_brand_profile / get_brand_profile_by_id。"""
+    return _BRAND_PROFILE_CACHE.get(_sync_current_brand_id()) or default_brand_profile()
 
 
-def get_brand_profile() -> BrandProfile:
-    """获取当前被测品牌档案（公共接口，供 eval_runner / task_service 等使用）。"""
-    return _active_brand_profile()
+def _sync_current_brand_id() -> str:
+    """同步读 current_brand_id 缓存值（由 refresh_brand_cache 预填到 _CURRENT_BRAND_ID_SYNC）。"""
+    return _CURRENT_BRAND_ID_SYNC or "ucloud"
 
 
-async def refresh_brand_profile_cache():
-    """从 app_settings 重新加载品牌档案到缓存。init_db 与 brand-profile PUT 后调用。"""
-    global _BRAND_PROFILE_CACHE
-    saved = await get_setting("brand_profile", "")
-    if saved:
+_CURRENT_BRAND_ID_SYNC: str = "ucloud"
+
+
+def get_brand_profile(brand_id: Optional[str] = None) -> BrandProfile:
+    """取某品牌档案；brand_id 为 None 时取 current_brand_id。
+    缓存未命中时 fallback UCloud 默认（不抛异常，保证同步调用安全）。"""
+    bid = brand_id or _sync_current_brand_id()
+    return _BRAND_PROFILE_CACHE.get(bid) or default_brand_profile()
+
+
+def get_brand_profile_by_id(brand_id: str) -> BrandProfile:
+    """显式按 brand_id 取档案（评分重算用，不依赖 current）。未命中 fallback default。"""
+    return _BRAND_PROFILE_CACHE.get(brand_id) or default_brand_profile()
+
+
+async def get_current_brand_id() -> str:
+    """异步读 current_brand_id（app_settings）。"""
+    return await get_setting("current_brand_id", "ucloud") or "ucloud"
+
+
+async def set_current_brand_id(brand_id: str):
+    """设 current_brand_id 并同步到 _CURRENT_BRAND_ID_SYNC 缓存。"""
+    global _CURRENT_BRAND_ID_SYNC
+    await set_setting("current_brand_id", brand_id)
+    _CURRENT_BRAND_ID_SYNC = brand_id
+
+
+async def refresh_brand_cache():
+    """启动/品牌 CRUD 后重载所有 active 品牌档案到缓存 + 同步 current_brand_id。"""
+    global _CURRENT_BRAND_ID_SYNC
+    _BRAND_PROFILE_CACHE.clear()
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, brand_profile_json FROM brands WHERE is_active=1")
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+    for r in rows:
         try:
-            _BRAND_PROFILE_CACHE = BrandProfile.from_dict(json.loads(saved))
-            return
+            _BRAND_PROFILE_CACHE[r["id"]] = BrandProfile.from_dict(json.loads(r["brand_profile_json"]))
         except (ValueError, TypeError):
             pass
-    _BRAND_PROFILE_CACHE = default_brand_profile()
+    if not _BRAND_PROFILE_CACHE:
+        _BRAND_PROFILE_CACHE["ucloud"] = default_brand_profile()
+    _CURRENT_BRAND_ID_SYNC = await get_current_brand_id()
+
+
+# 向后兼容别名（旧调用方仍可用）
+async def refresh_brand_profile_cache():
+    await refresh_brand_cache()
 
 
 THIRD_PARTY_CITATION_DOMAINS = [
@@ -361,7 +400,7 @@ async def init_db():
         await db.close()
 
     # 加载被测品牌档案到缓存（自然问题/引用上下文判定用）
-    await refresh_brand_profile_cache()
+    await refresh_brand_cache()
 
 
 async def column_exists(db: aiosqlite.Connection, table: str, column: str) -> bool:
@@ -795,15 +834,23 @@ async def deactivate_all_questions():
         await db.close()
 
 
-async def save_brand_profile(profile: BrandProfile):
-    """持久化被测品牌档案到 app_settings 并刷新缓存。
-
-    同时镜像 brand_keywords 设置，兼容既有 /settings/keywords 接口与 Settings 页。
-    """
-    global _BRAND_PROFILE_CACHE
-    await set_setting("brand_profile", profile.to_json())
+async def save_brand_profile(profile: BrandProfile, brand_id: str = None):
+    """更新某品牌档案到 brands 表并刷新缓存。
+    brand_id 为 None 时更新 current 品牌。同时镜像 brand_keywords 兼容旧接口。"""
+    bid = brand_id or await get_current_brand_id()
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE brands SET brand_profile_json=?, brand_name=?, company_name=?, website=?, industry=? "
+            "WHERE id=?",
+            (profile.to_json(), profile.brand_name, profile.company_name,
+             profile.website, profile.industry, bid)
+        )
+        await db.commit()
+    finally:
+        await db.close()
     await set_setting("brand_keywords", json.dumps(profile.keywords, ensure_ascii=False))
-    _BRAND_PROFILE_CACHE = profile
+    _BRAND_PROFILE_CACHE[bid] = profile
 
 
 # ============ 设置 ============

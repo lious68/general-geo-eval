@@ -97,9 +97,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
+import { useCurrentBrand, onBrandChanged } from '../composables/useCurrentBrand'
+const { currentBrand } = useCurrentBrand()
 
 const questions = ref([])
 const filterCategory = ref('')
@@ -176,15 +178,14 @@ async function deleteQ(id) {
 
 // ---- AI 生成问题 ----
 async function openGenerateDialog() {
-  // 用当前品牌档案预填，并加载可用模型
   try {
-    const res = await apiFetch('/settings/brand-profile')
-    const d = res.data || {}
+    const d = currentBrand.value || {}
     genForm.value = {
       brand_name: d.brand_name || '',
       company_name: d.company_name || '',
       website: d.website || '',
       industry: d.industry || '',
+      brand_id: d.id || null,
       model_key: genForm.value.model_key || 'deepseek',
       scenario_count: 0,
     }
@@ -225,7 +226,12 @@ async function doGenerate() {
   }
 }
 
-onMounted(loadQuestions)
+let unsubBrand = null
+onMounted(() => {
+  loadQuestions()
+  unsubBrand = onBrandChanged(() => loadQuestions())
+})
+onBeforeUnmount(() => { if (unsubBrand) unsubBrand() })
 </script>
 
 <style scoped>

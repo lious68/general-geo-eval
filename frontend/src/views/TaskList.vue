@@ -222,6 +222,9 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
+import { useCurrentBrand, onBrandChanged } from '../composables/useCurrentBrand'
+const { currentBrand } = useCurrentBrand()
+let unsubBrand = null
 import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores, repushBatch } from '../api/tasks'
 import { renderMarkdown } from '../composables/useMarkdown'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
@@ -581,8 +584,11 @@ async function onRecalcAll() {
   } finally { recalculating.value = false }
 }
 
-onMounted(async () => { await load() })
-onBeforeUnmount(() => { stopPolling() })
+onMounted(async () => {
+  await load()
+  unsubBrand = onBrandChanged(() => load())
+})
+onBeforeUnmount(() => { stopPolling(); if (unsubBrand) unsubBrand() })
 </script>
 
 <style scoped>

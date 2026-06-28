@@ -1,13 +1,14 @@
 import { apiFetch } from '../composables/useWebSocket'
 
-export function listTasks() {
-  return apiFetch('/tasks')
+export function listTasks(brandId = null) {
+  const q = brandId ? `?brand_id=${encodeURIComponent(brandId)}` : ''
+  return apiFetch(`/tasks${q}`)
 }
 
-export function createTask({ name, categories, question_ids }) {
+export function createTask({ name, categories, question_ids, brand_id }) {
   return apiFetch('/tasks', {
     method: 'POST',
-    body: JSON.stringify({ name, categories: categories || null, question_ids: question_ids || null }),
+    body: JSON.stringify({ name, categories: categories || null, question_ids: question_ids || null, brand_id: brand_id || null }),
   })
 }
 

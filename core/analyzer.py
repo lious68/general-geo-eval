@@ -100,6 +100,39 @@ class AnalysisResult:
     raw_content: str = ""
 
 
+def has_effective_citation(result: AnalysisResult) -> bool:
+    """是否有有效引用（GEO 引用率口径的唯一真源）。
+
+    有效引用 = UCloud 官方引用 OR (回答提及 UCloud 时的第三方来源引用)。
+
+    - 官方引用：citations 或 all_cited_urls 中任一 is_ucloud 即计入。
+      必须同时扫 all_cited_urls —— analyzer 的 url_patterns 仅匹配 ucloud.cn /
+      ucloud.com / ucloudstack.com 根域，【子域名】官方 URL（docs.ucloud.cn /
+      www-waf.ucloud.cn / astraflow.ucloud.cn 等）只进 all_cited_urls，进不了
+      citations。只扫 citations 会漏判这类官方引用。
+    - 第三方来源引用：回答提及了 UCloud 且 citations 中有第三方域名 URL。
+      （analyzer._detect_citations 第 4 步已把符合条件的第三方 URL 从
+      all_cited_urls 拉进 citations，故这里只扫 citations 即可。）
+
+    此函数是 import 写入 has_citation 与 metrics 重算 citation_rate 的共同
+    口径，避免「存 0 重算 1」的不一致（DeepSeek 把官方子域链接堆在正文，
+    len(citations)>0 判 False，但 all_cited_urls 有 is_ucloud → 重算 True）。
+    """
+    for c in result.citations:
+        if c.is_ucloud:
+            return True
+    for c in result.all_cited_urls:
+        if c.is_ucloud:
+            return True
+    if result.ucloud_mentioned:
+        for c in result.citations:
+            if c.citation_type == "url" and not c.is_ucloud:
+                url = c.content.lower()
+                if any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
+                    return True
+    return False
+
+
 class ResponseAnalyzer:
     """响应分析器"""
 
@@ -296,7 +329,8 @@ class ResponseAnalyzer:
                 ))
                 seen.add(key)
 
-        result.has_citation = len(result.citations) > 0
+        # has_citation 走 GEO 口径（与 metrics._has_effective_citation 一致）。
+        result.has_citation = has_effective_citation(result)
         result.citation_count = len(result.citations)
 
     def _detect_recommendations(self, content: str, result: AnalysisResult):
@@ -614,6 +648,7 @@ class ResponseAnalyzer:
             # 注册到去重集合，防止后续搜索结果重复
             content_urls_in_text.add(url_base)
 
-        # 更新引用统计
-        result.has_citation = len(result.citations) > 0
+        # 更新引用统计：has_citation 走 GEO 口径（官方引用 / UCloud相关第三方引用），
+        # 与 metrics._has_effective_citation 一致，避免 import 存值与重算不一致。
+        result.has_citation = has_effective_citation(result)
         result.citation_count = len(result.citations)

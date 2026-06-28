@@ -934,7 +934,7 @@ async def backfill_citations(run_id: str) -> int:
             if not content:
                 continue
 
-            # 重新运行引用检测
+            # 重新运行引用检测（_detect_citations 内部已用 GEO 口径写 has_citation）
             result = AnalysisResult(question_id="", model_key="", model_name="")
             result.raw_content = content
             analyzer._detect_citations(content, result)
@@ -954,9 +954,12 @@ async def backfill_citations(run_id: str) -> int:
                 ensure_ascii=False
             )
 
+            # 同步回填 has_citation / citation_count（GEO 口径），避免与重算不一致
             await db.execute(
-                "UPDATE analysis_results SET citations=?, all_cited_urls=? WHERE id=?",
-                (citations_json, all_urls_json, row["id"])
+                "UPDATE analysis_results SET citations=?, all_cited_urls=?, "
+                "has_citation=?, citation_count=? WHERE id=?",
+                (citations_json, all_urls_json,
+                 int(result.has_citation), result.citation_count, row["id"])
             )
             count += 1
 

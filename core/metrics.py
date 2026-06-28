@@ -20,30 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 def _has_effective_citation(result: AnalysisResult) -> bool:
-    """判断是否有有效引用（与 database.py 口径一致）
+    """判断是否有有效引用（GEO 引用率口径）。
 
-    有效引用 = UCloud官方引用 OR (回答提及UCloud时的第三方来源引用)
-
-    官方引用：citations 或 all_cited_urls 中任一 is_ucloud 即计入。
-    必须同时扫 all_cited_urls —— analyzer 对【子域名】UCloud 官方 URL
-    （astraflow.ucloud.cn / docs.ucloud.cn / www-waf.ucloud.cn 等）只放进
-    all_cited_urls（url_patterns 仅匹配 ucloud.cn / ucloud.com / ucloudstack.com
-    根域，子域名进不了 citations），只扫 citations 会漏判这类官方引用。
+    委托 analyzer.has_effective_citation —— 这是 import 写入 has_citation 与
+    metrics 重算 citation_rate 的共同口径，避免「存 0 重算 1」不一致。
+    （DeepSeek 把官方子域链接堆在正文时曾因两套逻辑给出不同答案。）
     """
-    for c in result.citations:
-        if c.is_ucloud:
-            return True
-    for c in result.all_cited_urls:
-        if c.is_ucloud:
-            return True
-    # 第三方来源引用：回答提及了 UCloud 且有第三方域名引用
-    if result.ucloud_mentioned:
-        for c in result.citations:
-            if c.citation_type == "url" and not c.is_ucloud:
-                url = c.content.lower()
-                if any(domain in url for domain in THIRD_PARTY_CITATION_DOMAINS):
-                    return True
-    return False
+    from analyzer import has_effective_citation
+    return has_effective_citation(result)
 
 
 @dataclass

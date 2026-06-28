@@ -347,7 +347,12 @@ function openBatch(row) {
 
 async function onBatchDownloaded() {
   await load()
-  if (batchTaskId.value) await refreshBatches(batchTaskId.value)
+  if (batchTaskId.value) {
+    await refreshBatches(batchTaskId.value)
+    // 创建批次后自动启动轮询：状态 pushed→awaiting_human→running→imported
+    // 会自动流转刷新，用户无需手动刷新。
+    startPolling(batchTaskId.value)
+  }
 }
 
 async function downloadBatchConfig(b) {
@@ -388,6 +393,7 @@ async function repushBatchRow(b) {
 let pollTimer = null
 let pollTaskId = null
 const ACTIVE_BATCH_STATUSES = ['pushed', 'awaiting_human', 'running', 'importing']
+const POLL_INTERVAL = 8000  // 8s：状态自动跟进，无需人工刷新
 function startPolling(taskId) {
   stopPolling()
   pollTaskId = taskId
@@ -399,7 +405,7 @@ function startPolling(taskId) {
     } else {
       stopPolling()
     }
-  }, 15000)
+  }, POLL_INTERVAL)
 }
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }

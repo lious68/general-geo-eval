@@ -56,7 +56,11 @@
         <el-table-column label="题数" width="80">
           <template #default="{ row }">{{ (row.question_ids||[]).length }}</template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="140" />
+        <el-table-column label="状态" width="140">
+          <template #default="{ row }">
+            <el-tag size="small" :type="batchTagType(row.status)">{{ row.status || '-' }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="id" label="run_id" min-width="200" />
       </el-table>
     </el-card>
@@ -77,12 +81,12 @@
       :task-id="route.params.taskId"
       :task-name="detail.task.name"
       :total-qids="detail.task.question_ids"
-      @downloaded="load" />
+      @downloaded="onBatchCreated" />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { isAdmin } from '../composables/useWebSocket'
@@ -98,13 +102,34 @@ const file = ref(null)
 const importing = ref(false)
 const batchDialog = ref(false)
 
-async function load() {
-  loading.value = true
+async function load(silent = false) {
+  if (!silent) loading.value = true
   try {
     const res = await getTask(route.params.taskId)
     if (res?.success) detail.value = res.data
-    else ElMessage.error('任务不存在')
-  } finally { loading.value = false }
+    else if (!silent) ElMessage.error('任务不存在')
+  } finally { if (!silent) loading.value = false }
+}
+
+// 批次状态轮询：有活跃批次（推送/等待/运行/回传中）时每 8s 静默刷新，
+// 状态自动跟进 pushed→awaiting_human→running→imported，无需人工刷新。
+const ACTIVE_BATCH_STATUSES = ['pushed', 'awaiting_human', 'running', 'importing']
+const POLL_INTERVAL = 8000
+let pollTimer = null
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    const bs = (detail.value && detail.value.batches) || []
+    const active = bs.some(b => ACTIVE_BATCH_STATUSES.includes(b.status))
+    if (active) {
+      await load(true)
+    } else {
+      stopPolling()
+    }
+  }, POLL_INTERVAL)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
 function cellClass(s) {
@@ -127,7 +152,30 @@ async function doImport() {
 function viewResult() {
   router.push({ path: '/dashboard', query: { task_id: route.params.taskId } })
 }
-onMounted(load)
+
+// 批次创建后启动轮询（静默刷新状态）
+async function onBatchCreated() {
+  await load()
+  startPolling()
+}
+
+function batchTagType(status) {
+  const map = {
+    completed: 'success', imported: 'success',
+    config_downloaded: 'info', pushed: 'info',
+    awaiting_human: 'warning', running: 'warning', importing: 'warning',
+    failed: 'danger', push_failed: 'danger',
+  }
+  return map[status] || 'info'
+}
+
+onMounted(async () => {
+  await load()
+  // 进入页面时若有活跃批次，直接开始轮询
+  const bs = (detail.value && detail.value.batches) || []
+  if (bs.some(b => ACTIVE_BATCH_STATUSES.includes(b.status))) startPolling()
+})
+onBeforeUnmount(() => { stopPolling() })
 </script>
 
 <style scoped>

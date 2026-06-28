@@ -774,12 +774,14 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
 # ============ 问题管理 ============
 
 async def get_questions(category: str = None, question_type: str = None,
-                       active_only: bool = True) -> List[Dict]:
-    """获取问题列表"""
+                       active_only: bool = True, brand_id: str = None) -> List[Dict]:
+    """获取问题列表。brand_id 为 None 时取 current 品牌。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
-        query = "SELECT * FROM questions WHERE 1=1"
-        params = []
+        query = "SELECT * FROM questions WHERE brand_id=?"
+        params = [brand_id]
         if active_only:
             query += " AND is_active=1"
         if category:
@@ -790,24 +792,26 @@ async def get_questions(category: str = None, question_type: str = None,
             params.append(question_type)
         query += " ORDER BY id"
         cursor = await db.execute(query, params)
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
 
 
-async def upsert_question(q: Dict):
-    """新增或更新问题"""
+async def upsert_question(q: Dict, brand_id: str = None):
+    """新增或更新问题。brand_id 默认 current。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO questions (id, category, question_type, question, tags, difficulty, is_active)
-               VALUES (?, ?, ?, ?, ?, ?, 1)
+            """INSERT INTO questions (id, category, question_type, question, tags, difficulty, is_active, brand_id)
+               VALUES (?, ?, ?, ?, ?, ?, 1, ?)
                ON CONFLICT(id) DO UPDATE SET
                category=excluded.category, question_type=excluded.question_type,
-               question=excluded.question, tags=excluded.tags, difficulty=excluded.difficulty""",
+               question=excluded.question, tags=excluded.tags, difficulty=excluded.difficulty,
+               brand_id=excluded.brand_id""",
             (q["id"], q["category"], q["question_type"], q["question"],
-             json.dumps(q.get("tags", []), ensure_ascii=False), q.get("difficulty", "medium"))
+             json.dumps(q.get("tags", []), ensure_ascii=False), q.get("difficulty", "medium"), brand_id)
         )
         await db.commit()
     finally:
@@ -824,11 +828,13 @@ async def delete_question(question_id: str):
         await db.close()
 
 
-async def deactivate_all_questions():
-    """把全部问题置为 inactive（生成新题集前清场，旧题软删除可恢复）。"""
+async def deactivate_all_questions(brand_id: str = None):
+    """把某品牌的全部问题置为 inactive（生成新题集前清场）。brand_id 默认 current。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
-        await db.execute("UPDATE questions SET is_active=0")
+        await db.execute("UPDATE questions SET is_active=0 WHERE brand_id=?", (brand_id,))
         await db.commit()
     finally:
         await db.close()
@@ -1229,15 +1235,17 @@ async def count_task_units(run_id: str) -> Dict[str, int]:
 # ============================================================
 
 async def create_task(task_id: str, name: str, question_ids: List[str],
-                      categories: Optional[List[str]] = None) -> Dict:
-    """创建任务（固定总题集，创建时拍板）。"""
+                      categories: Optional[List[str]] = None, brand_id: str = None) -> Dict:
+    """创建任务（固定总题集，创建时拍板）。brand_id 默认 current。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
         await db.execute(
-            "INSERT INTO tasks (id, name, question_ids, categories, status) "
-            "VALUES (?, ?, ?, ?, 'active')",
+            "INSERT INTO tasks (id, name, question_ids, categories, status, brand_id) "
+            "VALUES (?, ?, ?, ?, 'active', ?)",
             (task_id, name, json.dumps(question_ids),
-             json.dumps(categories or []))
+             json.dumps(categories or []), brand_id)
         )
         await db.commit()
         return await get_task(task_id)
@@ -1260,12 +1268,14 @@ async def get_task(task_id: str) -> Optional[Dict]:
         await db.close()
 
 
-async def list_tasks(limit: int = 100, offset: int = 0) -> List[Dict]:
+async def list_tasks(limit: int = 100, offset: int = 0, brand_id: str = None) -> List[Dict]:
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset)
+            "SELECT * FROM tasks WHERE brand_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (brand_id, limit, offset)
         )
         rows = [dict(r) for r in await cursor.fetchall()]
         for t in rows:
@@ -1299,15 +1309,17 @@ async def delete_task(task_id: str):
 async def add_task_batch(run_id: str, task_id: str, batch_id: str, name: str,
                          model_keys: List[str], question_ids: List[str],
                          per_model: Dict[str, List[str]], config: Optional[Dict] = None) -> Dict:
-    """在 task 下建一个下载批次（evaluation_runs 行，status='config_downloaded'）。"""
+    """在 task 下建一个下载批次。brand_id 取 task.brand_id。"""
+    task = await get_task(task_id)
+    brand_id = (task or {}).get("brand_id") or "ucloud"
     db = await get_db()
     try:
         await db.execute(
             """INSERT INTO evaluation_runs
-               (id, name, status, model_keys, question_ids, total_questions, config, mode, task_id, batch_id)
-               VALUES (?, ?, 'config_downloaded', ?, ?, ?, ?, 'webchat', ?, ?)""",
+               (id, name, status, model_keys, question_ids, total_questions, config, mode, task_id, batch_id, brand_id)
+               VALUES (?, ?, 'config_downloaded', ?, ?, ?, ?, 'webchat', ?, ?, ?)""",
             (run_id, name, json.dumps(model_keys), json.dumps(question_ids),
-             sum(len(v) for v in per_model.values()), json.dumps(config or {}), task_id, batch_id)
+             sum(len(v) for v in per_model.values()), json.dumps(config or {}), task_id, batch_id, brand_id)
         )
         await db.commit()
         return await get_run(run_id)
@@ -1371,6 +1383,8 @@ async def list_pending_batches() -> List[Dict]:
 
 async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, result: Dict):
     """按 (task_id, model_key, question_id) 去重覆盖插入。"""
+    task = await get_task(task_id)
+    brand_id = (task or {}).get("brand_id") or "ucloud"
     db = await get_db()
     try:
         await db.execute(
@@ -1383,8 +1397,8 @@ async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, re
                 ucloud_mentioned, ucloud_mention_count, ucloud_rank,
                 has_citation, citation_count, ucloud_recommended, recommendation_strength,
                 sentiment_score, sentiment_label, position_weight, response_length,
-                raw_content, competitor_mentions, error_message, citations, all_cited_urls)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                raw_content, competitor_mentions, error_message, citations, all_cited_urls, brand_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (run_id, task_id, batch_id, result["question_id"], result["model_key"], result["model_name"],
              int(result["ucloud_mentioned"]), result["ucloud_mention_count"], result.get("ucloud_rank"),
              int(result["has_citation"]), result["citation_count"],
@@ -1394,7 +1408,7 @@ async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, re
              json.dumps(result.get("competitor_mentions", {}), ensure_ascii=False),
              result.get("error_message"),
              json.dumps(result.get("citations", []), ensure_ascii=False),
-             json.dumps(result.get("all_cited_urls", []), ensure_ascii=False))
+             json.dumps(result.get("all_cited_urls", []), ensure_ascii=False), brand_id)
         )
         await db.commit()
     finally:
@@ -1521,6 +1535,8 @@ async def delete_task_geo_scores(task_id: str):
 
 async def save_task_geo_scores(task_id: str, model_key: str, model_name: str,
                                category: Optional[str], scores: Dict):
+    task = await get_task(task_id)
+    brand_id = (task or {}).get("brand_id") or "ucloud"
     db = await get_db()
     try:
         await db.execute(
@@ -1528,13 +1544,13 @@ async def save_task_geo_scores(task_id: str, model_key: str, model_name: str,
                (task_id, run_id, model_key, model_name, category,
                 geo_score, coverage_rate, mention_rate, citation_rate,
                 recommendation_rate, sentiment_score, avg_rank,
-                total_questions, valid_responses)
-               VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                total_questions, valid_responses, brand_id)
+               VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (task_id, model_key, model_name, category,
              scores["geo_score"], scores["coverage_rate"], scores["mention_rate"],
              scores["citation_rate"], scores["recommendation_rate"],
              scores["sentiment_score"], scores["avg_rank"],
-             scores["total_questions"], scores["valid_responses"])
+             scores["total_questions"], scores["valid_responses"], brand_id)
         )
         await db.commit()
     finally:

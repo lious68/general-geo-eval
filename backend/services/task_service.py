@@ -64,18 +64,20 @@ def _new_id(prefix: str) -> str:
 
 
 async def create_task_with_questions(name: str, question_ids: List[str],
-                                     categories: Optional[List[str]] = None) -> Dict:
-    """建任务，固定总题集。"""
+                                     categories: Optional[List[str]] = None,
+                                     brand_id: str = None) -> Dict:
+    """建任务，固定总题集。brand_id 默认 current。"""
     task_id = _new_id("task")
-    return await db.create_task(task_id, name, question_ids, categories)
+    return await db.create_task(task_id, name, question_ids, categories, brand_id=brand_id)
 
 
 async def resolve_question_ids(question_ids: Optional[List[str]],
-                               categories: Optional[List[str]]) -> List[str]:
-    """从品类或显式 id 解析出固定总题集 id 列表。"""
+                               categories: Optional[List[str]],
+                               brand_id: str = None) -> List[str]:
+    """从品类或显式 id 解析出固定总题集 id 列表。brand_id 默认 current。"""
     questions = await db.get_questions(
         category=categories[0] if categories and len(categories) == 1 else None,
-        active_only=True,
+        active_only=True, brand_id=brand_id,
     )
     if categories:
         questions = [q for q in questions if q["category"] in categories]

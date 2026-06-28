@@ -1109,14 +1109,37 @@ class ErnieWebChatClient(WebChatClientBase):
             return allText;
         }""")
 
-        # 提取链接（从整个 answerBox 中获取）
+        # 提取引用来源：文心一言的参考资料列表项是 <li class="_reference-item_*"
+        # 带属性 data-long-press-ext-info='{"link":"<真实URL>","linkTitle":"<标题>",...}'，
+        # 列表项本身不是 <a href>（只有第一个可见"UCDN节点分布"才是 a.marklang-link）。
+        # 证据：scripts/diag_ernie_refs2.py —— 响应里有"共参考31篇资料"+序号+标题，
+        # 但 12 个 li 都 href=None，真实 URL 藏在 data-long-press-ext-info JSON 里。
+        # 这里解析该属性取 link，按序号 append 进引用来源段，analyzer 通用正则自动收录。
         links = await answer_box.evaluate("""
             el => {
-                const links = el.querySelectorAll('a[href]');
-                return Array.from(links).map(a => ({
-                    text: a.textContent.trim(),
-                    href: a.href
-                }));
+                const out = [];
+                // 1) 普通可见 a[href]（如 UCDN节点分布 a.marklang-link）
+                el.querySelectorAll('a[href]').forEach(a => {
+                    const href = a.href || '';
+                    if (!href || href.startsWith('javascript:') || href.startsWith('#')) return;
+                    out.push({ text: (a.textContent||'').trim(), href });
+                });
+                // 2) 参考资料列表项 li._reference-item_* 的 data-long-press-ext-info
+                el.querySelectorAll('li[data-long-press-ext-info]').forEach(li => {
+                    const raw = li.getAttribute('data-long-press-ext-info') || '';
+                    if (!raw) return;
+                    try {
+                        // 属性里 &quot; 需先解码成 "
+                        const info = JSON.parse(raw.replace(/&quot;/g, '"'));
+                        const href = info.link || info.href || '';
+                        if (!href) return;
+                        out.push({ text: (info.linkTitle || li.textContent || '').trim().replace(/\\s+/g,' '), href });
+                    } catch(e) {}
+                });
+                // 去重 by href
+                const seen = new Set(); const uniq = [];
+                for (const r of out) { if (!seen.has(r.href)) { seen.add(r.href); uniq.push(r); } }
+                return uniq;
             }
         """)
 

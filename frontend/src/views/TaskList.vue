@@ -68,7 +68,7 @@
                           <div class="result-q"><b>题目：</b>{{ r.question_text || '(题目原文缺失)' }}</div>
                           <div v-if="r.error_message" class="result-error"><el-icon><WarningFilled /></el-icon> {{ r.error_message }}</div>
                           <div v-else class="result-ans"><b>模型回答：</b>
-                            <pre class="result-pre">{{ r.raw_content || '(空)' }}</pre>
+                            <div class="result-markdown" v-html="renderMarkdown(r.raw_content || '')"></div>
                             <div v-if="citedUrlsOf(r).length" class="result-cites">
                               <span class="result-cites-label">📎 引用来源（{{ citedUrlsOf(r).length }}）：</span>
                               <div v-for="(u, i) in citedUrlsOf(r)" :key="i" class="result-cite-row">
@@ -223,6 +223,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
 import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores, repushBatch } from '../api/tasks'
+import { renderMarkdown } from '../composables/useMarkdown'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const router = useRouter()
@@ -614,6 +615,19 @@ onBeforeUnmount(() => { stopPolling() })
 .result-ans { font-size: 13px; color: #333; }
 .result-error { color: #c0392b; font-size: 13px; display: flex; align-items: center; gap: 4px; }
 .result-pre { white-space: pre-wrap; word-break: break-word; background: #f6f8fa; border-radius: 4px; padding: 8px; max-height: 240px; overflow: auto; margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+.result-markdown { background: #f6f8fa; border-radius: 4px; padding: 8px 10px; max-height: 320px; overflow: auto; margin: 4px 0 0; font-size: 12.5px; line-height: 1.6; color: #333; }
+.result-markdown h1,.result-markdown h2,.result-markdown h3 { font-size: 14px; font-weight: 700; margin: 8px 0 4px; }
+.result-markdown p { margin: 3px 0; }
+.result-markdown ul,.result-markdown ol { margin: 4px 0 4px 18px; padding: 0; }
+.result-markdown li { margin: 2px 0; }
+.result-markdown code { background: #eef1f5; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.result-markdown strong { font-weight: 700; }
+.result-markdown hr { border: none; border-top: 1px dashed #ccc; margin: 8px 0; }
+.result-markdown a { color: #409eff; text-decoration: none; word-break: break-all; }
+.result-markdown a:hover { text-decoration: underline; }
+.result-markdown .md-citations-label { font-size: 12px; color: #b88200; font-weight: 600; margin: 6px 0 2px; }
+.result-markdown ul.md-citations { list-style: none; margin-left: 0; }
+.result-markdown .md-cite-idx { color: #b88200; font-weight: 700; margin-right: 4px; }
 .result-cites { margin-top: 6px; padding: 6px 8px; background: #fffbea; border: 1px solid #f5dab1; border-radius: 4px; }
 .result-cites-label { font-size: 12px; color: #b88200; font-weight: 600; }
 .result-cite-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap; }

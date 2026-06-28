@@ -313,15 +313,14 @@
                   <div class="expand-label" style="margin-top:8px">AI 回答：</div>
                   <template v-if="row.response_content || row.response_summary">
                     <!-- 短内容直接显示 -->
-                    <div v-if="isShortContent(row)" class="expand-text full-answer">{{ row.response_content || row.response_summary }}</div>
+                    <div v-if="isShortContent(row)" class="expand-text full-answer" v-html="renderMarkdown(row.response_content || row.response_summary || '')"></div>
                     <!-- 长内容折叠展示 -->
                     <div v-else class="answer-collapse-wrapper">
                       <div class="answer-preview" @click="toggleAnswerExpand(row.question_id)">
-                        {{ getPreviewText(row) }}
+                        <span v-html="renderMarkdown(getPreviewText(row))"></span>
                         <span class="answer-toggle-btn">{{ expandedAnswers[row.question_id] ? '收起 ▲' : '展开查看完整回答 ▼' }}</span>
                       </div>
-                      <div v-if="expandedAnswers[row.question_id]" class="answer-full-content">
-                        {{ row.response_content || row.response_summary }}
+                      <div v-if="expandedAnswers[row.question_id]" class="answer-full-content" v-html="renderMarkdown(row.response_content || row.response_summary || '')">
                       </div>
                     </div>
                   </template>
@@ -382,6 +381,7 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { useRoute } from 'vue-router'
 import { apiFetch } from '../composables/useWebSocket'
+import { renderMarkdown } from '../composables/useMarkdown'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -862,4 +862,19 @@ onMounted(loadData)
 .expand-cite-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap; }
 .expand-cite-link { color: #409eff; font-size: 12px; word-break: break-all; text-decoration: none; }
 .expand-cite-link:hover { text-decoration: underline; }
+.expand-text.full-answer :deep(h1),.expand-text.full-answer :deep(h2),.expand-text.full-answer :deep(h3) { font-size: 14px; font-weight: 700; margin: 6px 0 3px; }
+.expand-text.full-answer :deep(p) { margin: 3px 0; }
+.expand-text.full-answer :deep(ul),.expand-text.full-answer :deep(ol) { margin: 4px 0 4px 20px; }
+.expand-text.full-answer :deep(li) { margin: 2px 0; }
+.expand-text.full-answer :deep(strong) { font-weight: 700; }
+.expand-text.full-answer :deep(code) { background:#eef1f5; padding:1px 4px; border-radius:3px; }
+.expand-text.full-answer :deep(a),.answer-full-content :deep(a),.answer-preview :deep(a) { color:#409eff; text-decoration:none; word-break:break-all; }
+.answer-full-content :deep(h1),.answer-full-content :deep(h2),.answer-full-content :deep(h3) { font-size: 14px; font-weight: 700; margin: 6px 0 3px; }
+.answer-full-content :deep(p) { margin: 3px 0; }
+.answer-full-content :deep(ul),.answer-full-content :deep(ol) { margin: 4px 0 4px 20px; }
+.answer-full-content :deep(li) { margin: 2px 0; }
+.answer-full-content :deep(hr) { border:none; border-top:1px dashed #ccc; margin:8px 0; }
+.answer-full-content :deep(.md-citations-label) { font-size:12px; color:#b88200; font-weight:600; margin:6px 0 2px; }
+.answer-full-content :deep(ul.md-citations) { list-style:none; margin-left:0; }
+.answer-full-content :deep(.md-cite-idx) { color:#b88200; font-weight:700; margin-right:4px; }
 </style>

@@ -22,8 +22,23 @@
 
 ## ★ 引用源
 
-- 从 `answer-box` 内取 `<a href>`，过滤 `javascript:` / `#` / `baidu.com/chat` 站内。
-- append 进 `引用来源` 段。
+文心一言的参考资料列表项是 `<li class="_reference-item_*">`，**本身不是 `<a href>`**——只有少数可见链接（如「UCDN节点分布」的 `a.marklang-link`）是真正的 `<a>`。每条来源的真实 URL 藏在 `li` 的属性里：
+
+```
+<li class="_reference-item_1jesp_5"
+    data-long-press-ext-info='{"link":"https://docs.ucloud.cn/...","linkTitle":"节点分布...",...}'>
+  1. 节点分布 云分发 UCDN_文档中心_UCloud中立云计算服务商
+</li>
+```
+
+响应文本里能看到「共参考31篇资料」+序号+标题，但 12 个 li 都 `href=None`，原版只抓 `a[href]` 只能拿到 1 条 → `citation_rate` 偏低。
+
+**抓取**（`_extract_response` 的 evaluate）：
+1. `a[href]`：普通可见链接（`marklang-link` 等），过滤 `javascript:` / `#` / `baidu.com/chat`。
+2. `li[data-long-press-ext-info]`：解析该属性（`&quot;` 先解码成 `"`）取 `link`，`linkTitle` 作为标题。
+3. 按 href 去重，append 进 `引用来源` 段。
+
+证据：`scripts/diag_ernie_refs2.py`。实测（q003，单题复跑）：`citation_count` 0→29，`all_cited_urls` 含 `docs.ucloud.cn`、`www.ucloud.cn`（is_ucloud）及知乎/bilibili/搜狐等第三方源。
 
 ## 登录态
 

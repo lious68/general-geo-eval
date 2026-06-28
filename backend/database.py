@@ -20,33 +20,72 @@ from brand_profile import (
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "geo.db")
 
-# 当前被测品牌档案缓存（init_db 时加载，brand-profile 设置时刷新）。
-# sync 辅助函数（is_natural_question / is_ucloud_related_citation 等）直接读缓存，
-# 避免在 async 上下文的同步循环里反复 await 读设置。
-_BRAND_PROFILE_CACHE: Optional[BrandProfile] = None
+# 多品牌：按 brand_id 缓存档案；current_brand_id 指向当前选中品牌。
+_BRAND_PROFILE_CACHE: Dict[str, BrandProfile] = {}
 
 
 def _active_brand_profile() -> BrandProfile:
-    """获取当前被测品牌档案（缓存未就绪时 fallback UCloud 默认）。"""
-    return _BRAND_PROFILE_CACHE or default_brand_profile()
+    """同步辅助：返回 current 品牌档案（缓存未就绪时 fallback UCloud 默认）。
+    仅供不能 await 的同步循环（如 is_ucloud_related_citation）兜底用，
+    主路径请用 get_brand_profile / get_brand_profile_by_id。"""
+    return _BRAND_PROFILE_CACHE.get(_sync_current_brand_id()) or default_brand_profile()
 
 
-def get_brand_profile() -> BrandProfile:
-    """获取当前被测品牌档案（公共接口，供 eval_runner / task_service 等使用）。"""
-    return _active_brand_profile()
+def _sync_current_brand_id() -> str:
+    """同步读 current_brand_id 缓存值（由 refresh_brand_cache 预填到 _CURRENT_BRAND_ID_SYNC）。"""
+    return _CURRENT_BRAND_ID_SYNC or "ucloud"
 
 
-async def refresh_brand_profile_cache():
-    """从 app_settings 重新加载品牌档案到缓存。init_db 与 brand-profile PUT 后调用。"""
-    global _BRAND_PROFILE_CACHE
-    saved = await get_setting("brand_profile", "")
-    if saved:
+_CURRENT_BRAND_ID_SYNC: str = "ucloud"
+
+
+def get_brand_profile(brand_id: Optional[str] = None) -> BrandProfile:
+    """取某品牌档案；brand_id 为 None 时取 current_brand_id。
+    缓存未命中时 fallback UCloud 默认（不抛异常，保证同步调用安全）。"""
+    bid = brand_id or _sync_current_brand_id()
+    return _BRAND_PROFILE_CACHE.get(bid) or default_brand_profile()
+
+
+def get_brand_profile_by_id(brand_id: str) -> BrandProfile:
+    """显式按 brand_id 取档案（评分重算用，不依赖 current）。未命中 fallback default。"""
+    return _BRAND_PROFILE_CACHE.get(brand_id) or default_brand_profile()
+
+
+async def get_current_brand_id() -> str:
+    """异步读 current_brand_id（app_settings）。"""
+    return await get_setting("current_brand_id", "ucloud") or "ucloud"
+
+
+async def set_current_brand_id(brand_id: str):
+    """设 current_brand_id 并同步到 _CURRENT_BRAND_ID_SYNC 缓存。"""
+    global _CURRENT_BRAND_ID_SYNC
+    await set_setting("current_brand_id", brand_id)
+    _CURRENT_BRAND_ID_SYNC = brand_id
+
+
+async def refresh_brand_cache():
+    """启动/品牌 CRUD 后重载所有 active 品牌档案到缓存 + 同步 current_brand_id。"""
+    global _CURRENT_BRAND_ID_SYNC
+    _BRAND_PROFILE_CACHE.clear()
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id, brand_profile_json FROM brands WHERE is_active=1")
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+    for r in rows:
         try:
-            _BRAND_PROFILE_CACHE = BrandProfile.from_dict(json.loads(saved))
-            return
+            _BRAND_PROFILE_CACHE[r["id"]] = BrandProfile.from_dict(json.loads(r["brand_profile_json"]))
         except (ValueError, TypeError):
             pass
-    _BRAND_PROFILE_CACHE = default_brand_profile()
+    if not _BRAND_PROFILE_CACHE:
+        _BRAND_PROFILE_CACHE["ucloud"] = default_brand_profile()
+    _CURRENT_BRAND_ID_SYNC = await get_current_brand_id()
+
+
+# 向后兼容别名（旧调用方仍可用）
+async def refresh_brand_profile_cache():
+    await refresh_brand_cache()
 
 
 THIRD_PARTY_CITATION_DOMAINS = [
@@ -311,6 +350,18 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS brands (
+    id                 TEXT PRIMARY KEY,
+    brand_name         TEXT NOT NULL,
+    company_name       TEXT DEFAULT '',
+    website           TEXT DEFAULT '',
+    industry          TEXT DEFAULT '',
+    brand_profile_json TEXT NOT NULL,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active         INTEGER DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_brands_active ON brands(is_active);
 """
 
 
@@ -341,8 +392,15 @@ async def init_db():
     finally:
         await db.close()
 
+    # 预置 ucloud 品牌 + current_brand_id（多品牌迁移：幂等）
+    db = await get_db()
+    try:
+        await _ensure_default_brand(db)
+    finally:
+        await db.close()
+
     # 加载被测品牌档案到缓存（自然问题/引用上下文判定用）
-    await refresh_brand_profile_cache()
+    await refresh_brand_cache()
 
 
 async def column_exists(db: aiosqlite.Connection, table: str, column: str) -> bool:
@@ -408,6 +466,45 @@ async def _migrate_add_columns(db: aiosqlite.Connection):
     await db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ar_task_model_q "
         "ON analysis_results(task_id, model_key, question_id)"
+    )
+    await db.commit()
+
+    # 多品牌：questions/tasks/runs/results/scores 加 brand_id（默认 ucloud）+ 索引
+    for table in ["questions", "tasks", "evaluation_runs", "analysis_results", "geo_scores"]:
+        if not await column_exists(db, table, "brand_id"):
+            await db.execute(
+                f"ALTER TABLE {table} ADD COLUMN brand_id TEXT DEFAULT 'ucloud'"
+            )
+            await db.commit()
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_questions_brand ON questions(brand_id, is_active)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_brand ON tasks(brand_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_runs_brand ON evaluation_runs(brand_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_results_brand ON analysis_results(brand_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_scores_brand ON geo_scores(brand_id)")
+    await db.commit()
+
+
+async def _ensure_default_brand(db: aiosqlite.Connection):
+    """幂等预置 ucloud 品牌 + current_brand_id。已有 brands 行则不覆盖。"""
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+    from brand_profile import default_brand_profile
+
+    cur = await db.execute("SELECT COUNT(*) FROM brands")
+    n = (await cur.fetchone())[0]
+    if n == 0:
+        profile = default_brand_profile()
+        await db.execute(
+            "INSERT OR IGNORE INTO brands (id, brand_name, company_name, website, industry, brand_profile_json, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            ("ucloud", profile.brand_name, profile.company_name,
+             profile.website, profile.industry, profile.to_json())
+        )
+        await db.commit()
+    # current_brand_id 默认 ucloud
+    await db.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('current_brand_id', 'ucloud') "
+        "ON CONFLICT(key) DO NOTHING"
     )
     await db.commit()
 
@@ -677,12 +774,14 @@ async def get_scores(run_id: str, category: str = None) -> List[Dict]:
 # ============ 问题管理 ============
 
 async def get_questions(category: str = None, question_type: str = None,
-                       active_only: bool = True) -> List[Dict]:
-    """获取问题列表"""
+                       active_only: bool = True, brand_id: str = None) -> List[Dict]:
+    """获取问题列表。brand_id 为 None 时取 current 品牌。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
-        query = "SELECT * FROM questions WHERE 1=1"
-        params = []
+        query = "SELECT * FROM questions WHERE brand_id=?"
+        params = [brand_id]
         if active_only:
             query += " AND is_active=1"
         if category:
@@ -693,24 +792,26 @@ async def get_questions(category: str = None, question_type: str = None,
             params.append(question_type)
         query += " ORDER BY id"
         cursor = await db.execute(query, params)
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
 
 
-async def upsert_question(q: Dict):
-    """新增或更新问题"""
+async def upsert_question(q: Dict, brand_id: str = None):
+    """新增或更新问题。brand_id 默认 current。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO questions (id, category, question_type, question, tags, difficulty, is_active)
-               VALUES (?, ?, ?, ?, ?, ?, 1)
+            """INSERT INTO questions (id, category, question_type, question, tags, difficulty, is_active, brand_id)
+               VALUES (?, ?, ?, ?, ?, ?, 1, ?)
                ON CONFLICT(id) DO UPDATE SET
                category=excluded.category, question_type=excluded.question_type,
-               question=excluded.question, tags=excluded.tags, difficulty=excluded.difficulty""",
+               question=excluded.question, tags=excluded.tags, difficulty=excluded.difficulty,
+               brand_id=excluded.brand_id""",
             (q["id"], q["category"], q["question_type"], q["question"],
-             json.dumps(q.get("tags", []), ensure_ascii=False), q.get("difficulty", "medium"))
+             json.dumps(q.get("tags", []), ensure_ascii=False), q.get("difficulty", "medium"), brand_id)
         )
         await db.commit()
     finally:
@@ -727,25 +828,120 @@ async def delete_question(question_id: str):
         await db.close()
 
 
-async def deactivate_all_questions():
-    """把全部问题置为 inactive（生成新题集前清场，旧题软删除可恢复）。"""
+async def deactivate_all_questions(brand_id: str = None):
+    """把某品牌的全部问题置为 inactive（生成新题集前清场）。brand_id 默认 current。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
-        await db.execute("UPDATE questions SET is_active=0")
+        await db.execute("UPDATE questions SET is_active=0 WHERE brand_id=?", (brand_id,))
         await db.commit()
     finally:
         await db.close()
 
 
-async def save_brand_profile(profile: BrandProfile):
-    """持久化被测品牌档案到 app_settings 并刷新缓存。
-
-    同时镜像 brand_keywords 设置，兼容既有 /settings/keywords 接口与 Settings 页。
-    """
-    global _BRAND_PROFILE_CACHE
-    await set_setting("brand_profile", profile.to_json())
+async def save_brand_profile(profile: BrandProfile, brand_id: str = None):
+    """[已弃用] 更新某品牌档案。新代码请用 db.update_brand(brand_id, profile)。
+    保留是为了兼容旧调用方（settings.brand-profile PUT 兜底现已直接用 update_brand）。"""
+    bid = brand_id or await get_current_brand_id()
+    await update_brand(bid, profile)
     await set_setting("brand_keywords", json.dumps(profile.keywords, ensure_ascii=False))
-    _BRAND_PROFILE_CACHE = profile
+
+
+# ============ 品牌库（多品牌） ============
+
+async def list_brands() -> List[Dict]:
+    """列出所有 active 品牌，含题集数/任务数摘要。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT b.id, b.brand_name, b.company_name, b.website, b.industry, "
+            "b.created_at, b.is_active, "
+            "(SELECT COUNT(*) FROM questions WHERE brand_id=b.id AND is_active=1) AS question_count, "
+            "(SELECT COUNT(*) FROM tasks WHERE brand_id=b.id AND status='active') AS task_count "
+            "FROM brands b WHERE b.is_active=1 ORDER BY b.created_at ASC"
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_brand(brand_id: str) -> Optional[Dict]:
+    """取单品牌（含 brand_profile dict）。仅返回 active。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM brands WHERE id=? AND is_active=1", (brand_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        b = dict(row)
+        try:
+            b["brand_profile"] = json.loads(b["brand_profile_json"])
+        except (ValueError, TypeError):
+            b["brand_profile"] = {}
+        return b
+    finally:
+        await db.close()
+
+
+async def create_brand(brand_id: str, profile: BrandProfile) -> Dict:
+    """新建品牌。id 冲突抛 ValueError。"""
+    db = await get_db()
+    try:
+        existing = await db.execute("SELECT 1 FROM brands WHERE id=?", (brand_id,))
+        if await existing.fetchone():
+            raise ValueError(f"品牌 id '{brand_id}' 已存在")
+        await db.execute(
+            "INSERT INTO brands (id, brand_name, company_name, website, industry, brand_profile_json, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            (brand_id, profile.brand_name, profile.company_name,
+             profile.website, profile.industry, profile.to_json())
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    _BRAND_PROFILE_CACHE[brand_id] = profile
+    return {"id": brand_id, "brand_name": profile.brand_name,
+            "company_name": profile.company_name, "website": profile.website,
+            "industry": profile.industry}
+
+
+async def update_brand(brand_id: str, profile: BrandProfile):
+    """更新品牌档案（重新 derive 后调用）。"""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE brands SET brand_name=?, company_name=?, website=?, industry=?, brand_profile_json=? "
+            "WHERE id=?",
+            (profile.brand_name, profile.company_name, profile.website,
+             profile.industry, profile.to_json(), brand_id)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    _BRAND_PROFILE_CACHE[brand_id] = profile
+
+
+async def delete_brand(brand_id: str):
+    """软删品牌（is_active=0）。若有活跃题集/任务，抛 ValueError 提示先清空。
+    ucloud 不可删。"""
+    if brand_id == "ucloud":
+        raise ValueError("ucloud 为预置默认品牌，不可删除")
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT 1 FROM questions WHERE brand_id=? AND is_active=1 LIMIT 1", (brand_id,))
+        if await cur.fetchone():
+            raise ValueError(f"品牌 '{brand_id}' 仍有活跃题集，请先清空题集再删")
+        cur = await db.execute("SELECT 1 FROM tasks WHERE brand_id=? AND status='active' LIMIT 1", (brand_id,))
+        if await cur.fetchone():
+            raise ValueError(f"品牌 '{brand_id}' 仍有活跃任务，请先删除任务再删")
+        await db.execute("UPDATE brands SET is_active=0 WHERE id=?", (brand_id,))
+        await db.commit()
+    finally:
+        await db.close()
+    _BRAND_PROFILE_CACHE.pop(brand_id, None)
 
 
 # ============ 设置 ============
@@ -1028,15 +1224,17 @@ async def count_task_units(run_id: str) -> Dict[str, int]:
 # ============================================================
 
 async def create_task(task_id: str, name: str, question_ids: List[str],
-                      categories: Optional[List[str]] = None) -> Dict:
-    """创建任务（固定总题集，创建时拍板）。"""
+                      categories: Optional[List[str]] = None, brand_id: str = None) -> Dict:
+    """创建任务（固定总题集，创建时拍板）。brand_id 默认 current。"""
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
         await db.execute(
-            "INSERT INTO tasks (id, name, question_ids, categories, status) "
-            "VALUES (?, ?, ?, ?, 'active')",
+            "INSERT INTO tasks (id, name, question_ids, categories, status, brand_id) "
+            "VALUES (?, ?, ?, ?, 'active', ?)",
             (task_id, name, json.dumps(question_ids),
-             json.dumps(categories or []))
+             json.dumps(categories or []), brand_id)
         )
         await db.commit()
         return await get_task(task_id)
@@ -1059,12 +1257,14 @@ async def get_task(task_id: str) -> Optional[Dict]:
         await db.close()
 
 
-async def list_tasks(limit: int = 100, offset: int = 0) -> List[Dict]:
+async def list_tasks(limit: int = 100, offset: int = 0, brand_id: str = None) -> List[Dict]:
+    if brand_id is None:
+        brand_id = await get_current_brand_id()
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset)
+            "SELECT * FROM tasks WHERE brand_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (brand_id, limit, offset)
         )
         rows = [dict(r) for r in await cursor.fetchall()]
         for t in rows:
@@ -1098,15 +1298,17 @@ async def delete_task(task_id: str):
 async def add_task_batch(run_id: str, task_id: str, batch_id: str, name: str,
                          model_keys: List[str], question_ids: List[str],
                          per_model: Dict[str, List[str]], config: Optional[Dict] = None) -> Dict:
-    """在 task 下建一个下载批次（evaluation_runs 行，status='config_downloaded'）。"""
+    """在 task 下建一个下载批次。brand_id 取 task.brand_id。"""
+    task = await get_task(task_id)
+    brand_id = (task or {}).get("brand_id") or "ucloud"
     db = await get_db()
     try:
         await db.execute(
             """INSERT INTO evaluation_runs
-               (id, name, status, model_keys, question_ids, total_questions, config, mode, task_id, batch_id)
-               VALUES (?, ?, 'config_downloaded', ?, ?, ?, ?, 'webchat', ?, ?)""",
+               (id, name, status, model_keys, question_ids, total_questions, config, mode, task_id, batch_id, brand_id)
+               VALUES (?, ?, 'config_downloaded', ?, ?, ?, ?, 'webchat', ?, ?, ?)""",
             (run_id, name, json.dumps(model_keys), json.dumps(question_ids),
-             sum(len(v) for v in per_model.values()), json.dumps(config or {}), task_id, batch_id)
+             sum(len(v) for v in per_model.values()), json.dumps(config or {}), task_id, batch_id, brand_id)
         )
         await db.commit()
         return await get_run(run_id)
@@ -1170,6 +1372,8 @@ async def list_pending_batches() -> List[Dict]:
 
 async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, result: Dict):
     """按 (task_id, model_key, question_id) 去重覆盖插入。"""
+    task = await get_task(task_id)
+    brand_id = (task or {}).get("brand_id") or "ucloud"
     db = await get_db()
     try:
         await db.execute(
@@ -1182,8 +1386,8 @@ async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, re
                 ucloud_mentioned, ucloud_mention_count, ucloud_rank,
                 has_citation, citation_count, ucloud_recommended, recommendation_strength,
                 sentiment_score, sentiment_label, position_weight, response_length,
-                raw_content, competitor_mentions, error_message, citations, all_cited_urls)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                raw_content, competitor_mentions, error_message, citations, all_cited_urls, brand_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (run_id, task_id, batch_id, result["question_id"], result["model_key"], result["model_name"],
              int(result["ucloud_mentioned"]), result["ucloud_mention_count"], result.get("ucloud_rank"),
              int(result["has_citation"]), result["citation_count"],
@@ -1193,7 +1397,7 @@ async def save_task_analysis_result(task_id: str, batch_id: str, run_id: str, re
              json.dumps(result.get("competitor_mentions", {}), ensure_ascii=False),
              result.get("error_message"),
              json.dumps(result.get("citations", []), ensure_ascii=False),
-             json.dumps(result.get("all_cited_urls", []), ensure_ascii=False))
+             json.dumps(result.get("all_cited_urls", []), ensure_ascii=False), brand_id)
         )
         await db.commit()
     finally:
@@ -1320,6 +1524,8 @@ async def delete_task_geo_scores(task_id: str):
 
 async def save_task_geo_scores(task_id: str, model_key: str, model_name: str,
                                category: Optional[str], scores: Dict):
+    task = await get_task(task_id)
+    brand_id = (task or {}).get("brand_id") or "ucloud"
     db = await get_db()
     try:
         await db.execute(
@@ -1327,13 +1533,13 @@ async def save_task_geo_scores(task_id: str, model_key: str, model_name: str,
                (task_id, run_id, model_key, model_name, category,
                 geo_score, coverage_rate, mention_rate, citation_rate,
                 recommendation_rate, sentiment_score, avg_rank,
-                total_questions, valid_responses)
-               VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                total_questions, valid_responses, brand_id)
+               VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (task_id, model_key, model_name, category,
              scores["geo_score"], scores["coverage_rate"], scores["mention_rate"],
              scores["citation_rate"], scores["recommendation_rate"],
              scores["sentiment_score"], scores["avg_rank"],
-             scores["total_questions"], scores["valid_responses"])
+             scores["total_questions"], scores["valid_responses"], brand_id)
         )
         await db.commit()
     finally:

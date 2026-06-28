@@ -9,10 +9,18 @@
         <el-icon class="logo-icon"><Aim /></el-icon>
         <span class="logo-text">GEO 评估</span>
       </div>
+      <!-- 全局当前品牌选择器 -->
+      <div class="brand-selector">
+        <el-select v-model="currentBrandId" placeholder="选择品牌" size="small"
+                   :loading="brandLoading" @change="onSwitchBrand" style="width:100%">
+          <el-option v-for="b in brands" :key="b.id" :label="b.brand_name + (b.id === 'ucloud' ? ' (默认)' : '')"
+                     :value="b.id" />
+        </el-select>
+      </div>
       <el-menu :default-active="currentRoute" router class="sidebar-menu">
         <el-menu-item index="/">
           <el-icon><Aim /></el-icon>
-          <span>品牌设置</span>
+          <span>品牌管理</span>
         </el-menu-item>
         <el-menu-item index="/dashboard">
           <el-icon><DataAnalysis /></el-icon>
@@ -83,6 +91,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { removeToken, getToken, getRole, getUsername } from './composables/useWebSocket'
 import { useEvalProgressStore } from './stores/evalProgress'
+import { useCurrentBrand } from './composables/useCurrentBrand'
 
 const route = useRoute()
 const router = useRouter()
@@ -90,6 +99,9 @@ const currentRoute = computed(() => route.path)
 const currentRole = ref(getRole())
 const currentUsername = ref(getUsername())
 const evalStore = useEvalProgressStore()
+const { currentBrand, brands, loading: brandLoading, refresh: refreshBrands, setCurrent } = useCurrentBrand()
+const currentBrandId = ref('')
+watch(currentBrand, (b) => { currentBrandId.value = b?.id || '' })
 
 // 路由变化时同步 localStorage 中的角色信息（登录后跳转时触发）
 watch(currentRoute, () => {
@@ -97,10 +109,15 @@ watch(currentRoute, () => {
   currentUsername.value = getUsername()
 })
 
+async function onSwitchBrand(id) {
+  await setCurrent(id)
+}
+
 // 页面加载时自动检测是否有运行中的评测，恢复状态（需要登录态）
 onMounted(() => {
   if (getToken()) {
     evalStore.recoverRunningEval()
+    refreshBrands()
   }
 })
 
@@ -207,4 +224,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft
 .hb-time { font-size: 11px; color: rgba(255,255,255,0.4); margin-left: 4px; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+.brand-selector { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.brand-selector :deep(.el-select) { --el-fill-color-blank: rgba(255,255,255,0.08); }
+.brand-selector :deep(.el-select__wrapper) { background: rgba(255,255,255,0.08); box-shadow: none; }
+.brand-selector :deep(.el-select__placeholder), .brand-selector :deep(.el-select__selected-item) { color: #fff; }
 </style>

@@ -64,18 +64,34 @@ def _new_id(prefix: str) -> str:
 
 
 async def create_task_with_questions(name: str, question_ids: List[str],
-                                     categories: Optional[List[str]] = None) -> Dict:
-    """建任务，固定总题集。"""
+                                     categories: Optional[List[str]] = None,
+                                     brand_id: str = None) -> Dict:
+    """建任务，固定总题集。brand_id 未指定时从 question_ids 推断（取第一题所属品牌），推断失败则 current。"""
+    if brand_id is None and question_ids:
+        # 按题所属品牌推断任务品牌，避免切换 current 时建错品牌的任务
+        conn = await db.get_db()
+        try:
+            placeholders = ",".join("?" * len(question_ids))
+            cursor = await conn.execute(
+                f"SELECT brand_id FROM questions WHERE id IN ({placeholders}) LIMIT 1",
+                question_ids,
+            )
+            row = await cursor.fetchone()
+            if row and row["brand_id"]:
+                brand_id = row["brand_id"]
+        finally:
+            await conn.close()
     task_id = _new_id("task")
-    return await db.create_task(task_id, name, question_ids, categories)
+    return await db.create_task(task_id, name, question_ids, categories, brand_id=brand_id)
 
 
 async def resolve_question_ids(question_ids: Optional[List[str]],
-                               categories: Optional[List[str]]) -> List[str]:
-    """从品类或显式 id 解析出固定总题集 id 列表。"""
+                               categories: Optional[List[str]],
+                               brand_id: str = None) -> List[str]:
+    """从品类或显式 id 解析出固定总题集 id 列表。brand_id 默认 current。"""
     questions = await db.get_questions(
         category=categories[0] if categories and len(categories) == 1 else None,
-        active_only=True,
+        active_only=True, brand_id=brand_id,
     )
     if categories:
         questions = [q for q in questions if q["category"] in categories]
@@ -109,20 +125,21 @@ async def create_batch_config(task_id: str, model_keys: List[str],
         if bad:
             raise ValueError(f"模型 {mk} 的题区间含任务总题集外的题: {bad[:3]}")
 
-    # 取完整题对象（units 并集）
+    # 取完整题对象（units 并集）— 按 task.brand_id 取，防跨品牌时 current 不同导致题集缺失
     union_qids = sorted({q for qids in per_model_question_ids.values() for q in qids})
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in union_qids if qid in q_map]
 
     batch_id = _new_id("batch")
     run_id = _new_id("run")
-    # 品牌档案随配置透传给本地 runner，保证本地分析口径与服务端一致
-    brand_profile = db.get_brand_profile()
+    # 品牌档案随配置透传给本地 runner，按 task 所属品牌取（多品牌不串口径）
+    brand_profile = db.get_brand_profile_by_id(task.get("brand_id") or "ucloud")
     config = {
         "version": 2,
         "task_id": task_id,
         "task_name": task["name"],
+        "brand_id": task.get("brand_id") or "ucloud",
         "batch_id": batch_id,
         "run_id": run_id,
         "generated_at": datetime.utcnow().isoformat(),
@@ -166,13 +183,15 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
     per_model = cfg.get("per_model_question_ids") or {}
     model_keys = b.get("model_keys") or list(per_model.keys())
     union_qids = sorted({q for qs in per_model.values() for q in qs}) or (b.get("question_ids") or [])
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in union_qids if qid in q_map]
+    # 兼容旧批次重建
     return {
         "version": 2,
         "task_id": task_id,
         "task_name": task["name"],
+        "brand_id": task.get("brand_id") or "ucloud",
         "batch_id": batch_id,
         "run_id": b.get("id"),
         "generated_at": b.get("started_at") or datetime.utcnow().isoformat(),
@@ -180,7 +199,7 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
         "units": [{"model_key": mk, "question_ids": per_model.get(mk, [])} for mk in model_keys],
         "questions": questions,
         "delay": cfg.get("delay", 8.0),
-        "brand_profile": db.get_brand_profile().to_dict(),
+        "brand_profile": db.get_brand_profile_by_id(task.get("brand_id") or "ucloud").to_dict(),
     }
 
 
@@ -242,7 +261,7 @@ async def recalculate_task_scores(task_id: str) -> None:
         raise ValueError("任务不存在")
     await db.delete_task_geo_scores(task_id)
 
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     # task 固定题集对应的题对象（用于自然问题过滤与品类）
     task_questions = [q_map[qid] for qid in task["question_ids"] if qid in q_map]
@@ -253,7 +272,8 @@ async def recalculate_task_scores(task_id: str) -> None:
         by_model.setdefault(r["model_key"], []).append(r)
 
     calculator = MetricsCalculator()
-    brand_profile = db.get_brand_profile()
+    # 多品牌：评分按 task 所属品牌口径算，不依赖全局 current（防切品牌串口径）
+    brand_profile = db.get_brand_profile_by_id(task.get("brand_id") or "ucloud")
     for mk, mresults in by_model.items():
         model_name = mresults[0].get("model_name") or mk
         analysis_objects = [_result_to_analysis(r) for r in mresults]
@@ -355,7 +375,7 @@ async def build_task_detail(task_id: str) -> Optional[Dict]:
     scores = await db.get_task_scores(task_id)
 
     all_qids = task["question_ids"]
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in all_qids if qid in q_map]
 

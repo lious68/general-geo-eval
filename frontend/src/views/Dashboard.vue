@@ -392,13 +392,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
 import { useRoute, useRouter } from 'vue-router'
 import { apiFetch } from '../composables/useWebSocket'
 import { renderMarkdown } from '../composables/useMarkdown'
 import { ElMessage } from 'element-plus'
 import { listTasks } from '../api/tasks'
+import { useCurrentBrand, onBrandChanged } from '../composables/useCurrentBrand'
+const { currentBrand } = useCurrentBrand()
+let unsubBrand = null
 
 const route = useRoute()
 const router = useRouter()
@@ -822,7 +825,16 @@ function renderChannelChart() {
   window.addEventListener('resize', () => chart.resize())
 }
 
-onMounted(loadData)
+onMounted(() => {
+  loadData()
+  unsubBrand = onBrandChanged(() => {
+    selectedTaskId.value = ''
+    scores.value = []; charts.value = {}; latestRun.value = null
+    router.replace({ path: '/dashboard' }).catch(() => {})
+    loadData()
+  })
+})
+onBeforeUnmount(() => { if (unsubBrand) unsubBrand() })
 
 // 监听路由 query 变化：下拉切任务（router.push 改 query）或外部导航进入时重载。
 // watch 默认不在挂载时触发（无 immediate），故 onMounted 的首次 loadData 不会被重复触发。

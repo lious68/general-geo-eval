@@ -42,6 +42,8 @@ def main():
     assert r.status_code == 200, r.text
     cfg = r.json()["data"]
     assert cfg["version"] == 2 and cfg["task_id"] == task_id, cfg
+    assert cfg.get("brand_id") == "ucloud", f"config 应带 brand_id=ucloud（默认当前品牌），实得 {cfg.get('brand_id')}"
+    assert "brand_profile" in cfg, "config 应带 brand_profile"
 
     payload = {"meta": {"task_id": task_id, "batch_id": cfg["batch_id"], "run_id": cfg["run_id"]},
                "questions": [], "analysis_results": {"kimi": [_mk("Q1", "kimi")]}}

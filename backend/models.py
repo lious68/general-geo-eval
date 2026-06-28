@@ -92,6 +92,25 @@ class BrandProfileUpdate(BaseModel):
     industry: str = ""
 
 
+class BrandCreate(BaseModel):
+    brand_id: str  # slug
+    brand_name: str
+    company_name: str = ""
+    website: str = ""
+    industry: str = ""
+
+
+class BrandUpdate(BaseModel):
+    brand_name: str
+    company_name: str = ""
+    website: str = ""
+    industry: str = ""
+
+
+class CurrentBrandUpdate(BaseModel):
+    brand_id: str
+
+
 class QuestionGenerate(BaseModel):
     brand_name: str
     company_name: str = ""
@@ -99,6 +118,7 @@ class QuestionGenerate(BaseModel):
     industry: str = ""
     model_key: str = "deepseek"
     scenario_count: Optional[int] = None
+    brand_id: Optional[str] = None  # None=当前品牌
 
 
 # ============ 设置 ============
@@ -130,6 +150,7 @@ class TaskCreate(BaseModel):
     name: str = "GEO评估"
     question_ids: Optional[List[str]] = None
     categories: Optional[List[str]] = None
+    brand_id: Optional[str] = None  # None=当前品牌
 
 
 class BatchCreate(BaseModel):

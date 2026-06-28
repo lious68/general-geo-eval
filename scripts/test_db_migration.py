@@ -33,6 +33,24 @@ async def main():
             assert col in cols, f"{table}.{col} 未添加"
         cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_ar_task_model_q'")
         assert (await cur.fetchone()) is not None, "唯一索引未创建"
+        # brands 表 + brand_id 列 + 预置 ucloud
+        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='brands'")
+        assert (await cur.fetchone()) is not None, "brands 表未创建"
+        for table in ["questions", "tasks", "evaluation_runs", "analysis_results", "geo_scores"]:
+            cur = await conn.execute(f"PRAGMA table_info({table})")
+            cols = [r["name"] for r in await cur.fetchall()]
+            assert "brand_id" in cols, f"{table}.brand_id 未添加"
+        cur = await conn.execute("SELECT COUNT(*) FROM brands")
+        assert (await cur.fetchone())[0] >= 1, "brands 表应预置至少 1 行"
+        cur = await conn.execute("SELECT id FROM brands WHERE id='ucloud'")
+        assert (await cur.fetchone()) is not None, "未预置 ucloud 品牌"
+        cur = await conn.execute("SELECT value FROM app_settings WHERE key='current_brand_id'")
+        row = await cur.fetchone()
+        assert row and row["value"] == "ucloud", f"current_brand_id 应为 ucloud，实得 {row['value'] if row else None}"
+        # 现有 questions 行的 brand_id 默认补为 ucloud（init_db 导入默认题后）
+        cur = await conn.execute("SELECT DISTINCT brand_id FROM questions")
+        bids = [r["brand_id"] for r in await cur.fetchall()]
+        assert bids == ["ucloud"] or bids == [], f"questions.brand_id 应默认 ucloud，实得 {bids}"
     finally:
         await conn.close()
 

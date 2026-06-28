@@ -406,11 +406,13 @@ async def build_task_list_summary() -> List[Dict]:
                     models.append(mk)
         total_cells = len(all_qids) * len(models)
         done_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "done")
+        missing_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "missing")
         out.append({
             **t,
             "models": models,
             "total_cells": total_cells,
             "done_cells": done_cells,
+            "missing_cells": missing_cells,
             "coverage_rate": round(done_cells / total_cells, 3) if total_cells else 0,
         })
     return out

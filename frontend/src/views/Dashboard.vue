@@ -51,16 +51,31 @@
 
       <!-- 评测时间 -->
       <div v-if="latestRun" class="run-breadcrumb">
-        <template v-if="route.query.task_id">
-          <span>任务：</span>
-          <el-tag size="small" type="success">{{ latestRun.name }}</el-tag>
-          <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.back()">← 返回任务详情</el-button>
-        </template>
-        <template v-else>
+        <!-- run_id 模式（API 历史评测单次结果）：无任务下拉 -->
+        <template v-if="route.query.run_id">
           <span>评测时间：</span>
           <el-tag size="small" type="info">{{ formatRunTime(latestRun.completed_at || latestRun.started_at) }}</el-tag>
           <el-tag v-if="latestRun.mode === 'webchat'" size="small" type="warning" style="margin-left:4px"><el-icon><Monitor /></el-icon> WebChat</el-tag>
-          <el-button v-if="route.query.run_id" size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
+          <el-button size="small" link type="primary" style="margin-left:8px" @click="$router.push('/history')">← 返回历史评测情况</el-button>
+        </template>
+        <!-- task 模式：任务下拉（默认显示或显式 task_id 都显示，可切换） -->
+        <template v-else-if="tasks.length">
+          <span>选择任务：</span>
+          <el-select v-model="selectedTaskId" placeholder="选择任务" size="small" style="width:300px"
+                     :loading="tasksLoading" filterable @change="onSelectTask">
+            <el-option v-for="t in tasks" :key="t.id"
+                       :label="`${t.name}${t.coverage_rate >= 1 ? ' ✓' : '（未跑完）'}`"
+                       :value="t.id" />
+          </el-select>
+          <el-tooltip v-if="incompleteHint" placement="bottom" :width="380" effect="light">
+            <template #content>
+              <div style="font-size:13px;line-height:1.6">{{ incompleteHint }}</div>
+            </template>
+            <el-tag size="small" type="warning" style="margin-left:8px;cursor:help">
+              <el-icon><WarningFilled /></el-icon> 该任务未完整跑完
+            </el-tag>
+          </el-tooltip>
+          <el-button v-if="route.query.task_id" size="small" link type="primary" style="margin-left:8px" @click="$router.back()">← 返回任务详情</el-button>
         </template>
       </div>
 
@@ -377,14 +392,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { apiFetch } from '../composables/useWebSocket'
 import { renderMarkdown } from '../composables/useMarkdown'
 import { ElMessage } from 'element-plus'
+import { listTasks } from '../api/tasks'
 
 const route = useRoute()
+const router = useRouter()
 
 function formatRunTime(ts) {
   if (!ts) return ''
@@ -398,6 +415,12 @@ const charts = ref({})
 const latestRun = ref(null)
 const loading = ref(true)
 const hasData = computed(() => scores.value.length > 0)
+
+// 任务选择器：下拉切任务；默认选最近一个完整跑完的任务，否则最近任务并给提示
+const tasks = ref([])
+const selectedTaskId = ref('')
+const tasksLoading = ref(false)
+const incompleteHint = ref('')
 
 // 引用详情 & 渠道聚类
 const citationDetails = ref({})
@@ -621,12 +644,75 @@ function renderChart(domRef, option) {
   window.addEventListener('resize', () => chart.resize())
 }
 
+async function loadTaskList() {
+  tasksLoading.value = true
+  try {
+    const res = await listTasks()
+    tasks.value = res.data || []
+  } catch (e) {
+    console.warn('loadTaskList error:', e)
+    tasks.value = []
+  } finally {
+    tasksLoading.value = false
+  }
+}
+
+// 在任务列表里挑默认任务：
+// 优先「最近一个完整跑完的（coverage_rate >= 1）」，否则「最近一个任务」并给提示。
+function pickDefaultTask() {
+  incompleteHint.value = ''
+  if (!tasks.value.length) return ''
+  const sorted = [...tasks.value] // list_tasks 已按 created_at DESC，保持原序
+  const fullyDone = sorted.find(t => t.coverage_rate >= 1)
+  if (fullyDone) return fullyDone.id
+  // 没有完整跑完的：取最近一个，给提示
+  const latest = sorted[0]
+  const pct = Math.round((latest.coverage_rate || 0) * 100)
+  incompleteHint.value =
+    `当前没有任何任务完整跑完。已默认显示最近的任务「${latest.name}」` +
+    `（覆盖率 ${latest.done_cells || 0}/${latest.total_cells || 0}，约 ${pct}%），` +
+    `数据可能不完整。可在下拉中选择其他任务查看。`
+  return latest.id
+}
+
+// 下拉切换任务：用路由 query 承载 selectedTaskId，触发 watch 重载
+function onSelectTask(taskId) {
+  if (!taskId) return
+  router.push({ path: '/dashboard', query: { task_id: taskId } })
+}
+
+// 根据 task 列表条目设置「未跑完」提示（coverage_rate < 1 时提示）
+function setIncompleteHint(taskId) {
+  const t = tasks.value.find(x => x.id === taskId)
+  if (t && t.coverage_rate < 1) {
+    const pct = Math.round((t.coverage_rate || 0) * 100)
+    incompleteHint.value =
+      `任务「${t.name}」尚未完整跑完（覆盖率 ${t.done_cells || 0}/${t.total_cells || 0}，约 ${pct}%），数据可能不完整。`
+  } else {
+    incompleteHint.value = ''
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
-    const taskId = route.query.task_id || ''
+    // 通过 query 显式指定 task_id/run_id 时直接用；否则从任务列表挑默认任务。
+    let taskId = route.query.task_id || ''
     const queryRunId = route.query.run_id
     let runId = null
+
+    // 确保任务列表已加载（供下拉填充 + 完成度判断）
+    if (!tasks.value.length) await loadTaskList()
+
+    if (!taskId && !queryRunId) {
+      // 无 query：挑默认任务（最近一个完整跑完的，否则最近一个 + 提示）
+      taskId = pickDefaultTask()
+      selectedTaskId.value = taskId || ''
+    } else if (taskId) {
+      // 有 task_id query：同步下拉选中态，并按完成度给提示
+      selectedTaskId.value = taskId
+      setIncompleteHint(taskId)
+    }
 
     if (taskId) {
       // 任务级模式：使用 task_id 查询
@@ -638,6 +724,7 @@ async function loadData() {
       const runRes = await apiFetch(`/evaluations/${runId}`)
       latestRun.value = runRes.data || null
     } else {
+      // 任务列表为空：走旧 run 兜底（API 模式历史评测）
       const runsRes = await apiFetch('/evaluations?limit=1')
       const runs = runsRes.data || []
       if (!runs.length) {
@@ -736,12 +823,23 @@ function renderChannelChart() {
 }
 
 onMounted(loadData)
+
+// 监听路由 query 变化：下拉切任务（router.push 改 query）或外部导航进入时重载。
+// watch 默认不在挂载时触发（无 immediate），故 onMounted 的首次 loadData 不会被重复触发。
+watch(() => [route.query.task_id, route.query.run_id], async () => {
+  // 切任务时清旧数据，避免短暂闪烁错位
+  scores.value = []
+  charts.value = {}
+  latestRun.value = null
+  await loadData()
+})
 </script>
 
 <style scoped>
 .page-title { font-size: var(--fs-page-title); margin-bottom: 20px; color: var(--color-text); display: flex; align-items: center; gap: 8px; }
 .section-title { font-size: var(--fs-section-title); font-weight: 600; color: var(--color-text); margin-bottom: 14px; padding-left: 2px; }
-.run-breadcrumb { font-size: 13px; color: #666; margin-bottom: 16px; display: flex; align-items: center; }
+.run-breadcrumb { font-size: 13px; color: #666; margin-bottom: 16px; display: flex; align-items: center; gap: 4px; }
+.run-breadcrumb-spacer { display: inline-block; }
 
 /* 加载/空状态 */
 .loading-state { text-align: center; padding: 80px 0; color: #999; }

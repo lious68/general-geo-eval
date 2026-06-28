@@ -311,6 +311,18 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS brands (
+    id                 TEXT PRIMARY KEY,
+    brand_name         TEXT NOT NULL,
+    company_name       TEXT DEFAULT '',
+    website           TEXT DEFAULT '',
+    industry          TEXT DEFAULT '',
+    brand_profile_json TEXT NOT NULL,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active         INTEGER DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_brands_active ON brands(is_active);
 """
 
 
@@ -338,6 +350,13 @@ async def init_db():
         count = (await cursor.fetchone())[0]
         if count == 0:
             await _import_default_questions(db)
+    finally:
+        await db.close()
+
+    # 预置 ucloud 品牌 + current_brand_id（多品牌迁移：幂等）
+    db = await get_db()
+    try:
+        await _ensure_default_brand(db)
     finally:
         await db.close()
 
@@ -408,6 +427,45 @@ async def _migrate_add_columns(db: aiosqlite.Connection):
     await db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ar_task_model_q "
         "ON analysis_results(task_id, model_key, question_id)"
+    )
+    await db.commit()
+
+    # 多品牌：questions/tasks/runs/results/scores 加 brand_id（默认 ucloud）+ 索引
+    for table in ["questions", "tasks", "evaluation_runs", "analysis_results", "geo_scores"]:
+        if not await column_exists(db, table, "brand_id"):
+            await db.execute(
+                f"ALTER TABLE {table} ADD COLUMN brand_id TEXT DEFAULT 'ucloud'"
+            )
+            await db.commit()
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_questions_brand ON questions(brand_id, is_active)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_brand ON tasks(brand_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_runs_brand ON evaluation_runs(brand_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_results_brand ON analysis_results(brand_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_scores_brand ON geo_scores(brand_id)")
+    await db.commit()
+
+
+async def _ensure_default_brand(db: aiosqlite.Connection):
+    """幂等预置 ucloud 品牌 + current_brand_id。已有 brands 行则不覆盖。"""
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+    from brand_profile import default_brand_profile
+
+    cur = await db.execute("SELECT COUNT(*) FROM brands")
+    n = (await cur.fetchone())[0]
+    if n == 0:
+        profile = default_brand_profile()
+        await db.execute(
+            "INSERT OR IGNORE INTO brands (id, brand_name, company_name, website, industry, brand_profile_json, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            ("ucloud", profile.brand_name, profile.company_name,
+             profile.website, profile.industry, profile.to_json())
+        )
+        await db.commit()
+    # current_brand_id 默认 ucloud
+    await db.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('current_brand_id', 'ucloud') "
+        "ON CONFLICT(key) DO NOTHING"
     )
     await db.commit()
 

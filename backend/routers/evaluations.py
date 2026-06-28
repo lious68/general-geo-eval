@@ -154,6 +154,7 @@ async def recalculate_scores(run_id: str):
 
     # 重新计算
     calculator = MetricsCalculator()
+    # 裸 run（非 task）重算：按当前品牌口径（无 task.brand_id 可依）
     brand_profile = db.get_brand_profile()
     total = 0
     for mk, results in results_by_model.items():

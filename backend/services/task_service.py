@@ -66,7 +66,21 @@ def _new_id(prefix: str) -> str:
 async def create_task_with_questions(name: str, question_ids: List[str],
                                      categories: Optional[List[str]] = None,
                                      brand_id: str = None) -> Dict:
-    """建任务，固定总题集。brand_id 默认 current。"""
+    """建任务，固定总题集。brand_id 未指定时从 question_ids 推断（取第一题所属品牌），推断失败则 current。"""
+    if brand_id is None and question_ids:
+        # 按题所属品牌推断任务品牌，避免切换 current 时建错品牌的任务
+        conn = await db.get_db()
+        try:
+            placeholders = ",".join("?" * len(question_ids))
+            cursor = await conn.execute(
+                f"SELECT brand_id FROM questions WHERE id IN ({placeholders}) LIMIT 1",
+                question_ids,
+            )
+            row = await cursor.fetchone()
+            if row and row["brand_id"]:
+                brand_id = row["brand_id"]
+        finally:
+            await conn.close()
     task_id = _new_id("task")
     return await db.create_task(task_id, name, question_ids, categories, brand_id=brand_id)
 
@@ -119,12 +133,13 @@ async def create_batch_config(task_id: str, model_keys: List[str],
 
     batch_id = _new_id("batch")
     run_id = _new_id("run")
-    # 品牌档案随配置透传给本地 runner，保证本地分析口径与服务端一致
-    brand_profile = db.get_brand_profile()
+    # 品牌档案随配置透传给本地 runner，按 task 所属品牌取（多品牌不串口径）
+    brand_profile = db.get_brand_profile_by_id(task.get("brand_id") or "ucloud")
     config = {
         "version": 2,
         "task_id": task_id,
         "task_name": task["name"],
+        "brand_id": task.get("brand_id") or "ucloud",
         "batch_id": batch_id,
         "run_id": run_id,
         "generated_at": datetime.utcnow().isoformat(),
@@ -171,10 +186,12 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
     all_questions = await db.get_questions(active_only=True)
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in union_qids if qid in q_map]
+    # 兼容旧批次重建
     return {
         "version": 2,
         "task_id": task_id,
         "task_name": task["name"],
+        "brand_id": task.get("brand_id") or "ucloud",
         "batch_id": batch_id,
         "run_id": b.get("id"),
         "generated_at": b.get("started_at") or datetime.utcnow().isoformat(),
@@ -182,7 +199,7 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
         "units": [{"model_key": mk, "question_ids": per_model.get(mk, [])} for mk in model_keys],
         "questions": questions,
         "delay": cfg.get("delay", 8.0),
-        "brand_profile": db.get_brand_profile().to_dict(),
+        "brand_profile": db.get_brand_profile_by_id(task.get("brand_id") or "ucloud").to_dict(),
     }
 
 
@@ -255,7 +272,8 @@ async def recalculate_task_scores(task_id: str) -> None:
         by_model.setdefault(r["model_key"], []).append(r)
 
     calculator = MetricsCalculator()
-    brand_profile = db.get_brand_profile()
+    # 多品牌：评分按 task 所属品牌口径算，不依赖全局 current（防切品牌串口径）
+    brand_profile = db.get_brand_profile_by_id(task.get("brand_id") or "ucloud")
     for mk, mresults in by_model.items():
         model_name = mresults[0].get("model_name") or mk
         analysis_objects = [_result_to_analysis(r) for r in mresults]

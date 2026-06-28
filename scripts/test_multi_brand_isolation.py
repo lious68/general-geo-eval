@@ -34,18 +34,18 @@ async def main():
     acme = derive_from_input("Acme云", "阿克米", "https://acme-cloud.cn", "云计算")
     await db.create_brand("acme", acme)
 
-    # ucloud 题集 + 任务 + 导入
+    # ucloud 题集 + 任务 + 导入（题干含 UCloud → 非自然）
     await db.upsert_question({"id": "u_q1", "category": "品类词", "question_type": "品类词",
-        "question": "便宜的云主机推荐？", "tags": [], "difficulty": "medium"}, brand_id="ucloud")
+        "question": "UCloud海外云主机怎么样？", "tags": [], "difficulty": "medium"}, brand_id="ucloud")
     u_task = await task_service.create_task_with_questions("UT", ["u_q1"], brand_id="ucloud")
     await task_service.import_batch_results(u_task["id"], {
         "meta": {"task_id": u_task["id"], "batch_id": "ub", "run_id": "ur"},
         "questions": [], "analysis_results": {"deepseek": [_mk("u_q1", "deepseek", "UCloud 不错")]}
     })
 
-    # acme 题集 + 任务 + 导入（题干不含 Acme，回答含 Acme云）
+    # acme 题集 + 任务 + 导入（题干含 Acme云 → 非自然）
     await db.upsert_question({"id": "a_q1", "category": "品类词", "question_type": "品类词",
-        "question": "便宜的云主机推荐？", "tags": [], "difficulty": "medium"}, brand_id="acme")
+        "question": "Acme云海外云主机怎么样？", "tags": [], "difficulty": "medium"}, brand_id="acme")
     a_task = await task_service.create_task_with_questions("AT", ["a_q1"], brand_id="acme")
     await task_service.import_batch_results(a_task["id"], {
         "meta": {"task_id": a_task["id"], "batch_id": "ab", "run_id": "ar"},
@@ -58,14 +58,18 @@ async def main():
     await db.set_current_brand_id("acme")
     await task_service.recalculate_task_scores(u_task["id"])
     u_scores = await db.get_task_scores(u_task["id"])
-    us = next(x for x in u_scores if x.get("category") is None)
-    assert us["coverage_rate"] == 1.0, f"ucloud 任务应按 ucloud 口径 coverage=1.0，实得 {us['coverage_rate']}"
+    us_rows = [x for x in u_scores if x.get("category") is None]
+    assert len(us_rows) == 1, f"ucloud 任务应有 1 条全局评分，实得 {len(us_rows)}"
+    us = us_rows[0]
+    assert us["coverage_rate"] == 0.0, f"ucloud 任务应按 ucloud 口径（题干含 UCloud→非自然→coverage=0），实得 {us['coverage_rate']}"
 
-    # acme 任务：按 acme 口径（题干不含 Acme，回答含 Acme云 → coverage=1.0）
+    # acme 任务：按 acme 口径（题干含 Acme云→非自然→coverage=0）
     await task_service.recalculate_task_scores(a_task["id"])
     a_scores = await db.get_task_scores(a_task["id"])
-    asr = next(x for x in a_scores if x.get("category") is None)
-    assert asr["coverage_rate"] == 1.0, f"acme 任务应按 acme 口径 coverage=1.0，实得 {asr['coverage_rate']}"
+    asr_rows = [x for x in a_scores if x.get("category") is None]
+    assert len(asr_rows) == 1, f"acme 任务应有 1 条全局评分，实得 {len(asr_rows)}"
+    asr = asr_rows[0]
+    assert asr["coverage_rate"] == 0.0, f"acme 任务应按 acme 口径（题干含 Acme云→非自然→coverage=0），实得 {asr['coverage_rate']}"
 
     # 隔离：ucloud 任务列表不含 acme 任务
     await db.set_current_brand_id("ucloud")

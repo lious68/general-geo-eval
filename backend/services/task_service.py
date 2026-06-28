@@ -125,9 +125,9 @@ async def create_batch_config(task_id: str, model_keys: List[str],
         if bad:
             raise ValueError(f"模型 {mk} 的题区间含任务总题集外的题: {bad[:3]}")
 
-    # 取完整题对象（units 并集）
+    # 取完整题对象（units 并集）— 按 task.brand_id 取，防跨品牌时 current 不同导致题集缺失
     union_qids = sorted({q for qids in per_model_question_ids.values() for q in qids})
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in union_qids if qid in q_map]
 
@@ -183,7 +183,7 @@ async def get_batch_config(task_id: str, batch_id: str) -> Dict:
     per_model = cfg.get("per_model_question_ids") or {}
     model_keys = b.get("model_keys") or list(per_model.keys())
     union_qids = sorted({q for qs in per_model.values() for q in qs}) or (b.get("question_ids") or [])
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in union_qids if qid in q_map]
     # 兼容旧批次重建
@@ -261,7 +261,7 @@ async def recalculate_task_scores(task_id: str) -> None:
         raise ValueError("任务不存在")
     await db.delete_task_geo_scores(task_id)
 
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     # task 固定题集对应的题对象（用于自然问题过滤与品类）
     task_questions = [q_map[qid] for qid in task["question_ids"] if qid in q_map]
@@ -375,7 +375,7 @@ async def build_task_detail(task_id: str) -> Optional[Dict]:
     scores = await db.get_task_scores(task_id)
 
     all_qids = task["question_ids"]
-    all_questions = await db.get_questions(active_only=True)
+    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
     q_map = {q["id"]: q for q in all_questions}
     questions = [q_map[qid] for qid in all_qids if qid in q_map]
 

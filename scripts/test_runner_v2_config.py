@@ -12,7 +12,7 @@ import local_webchat_runner as R
 def main():
     cfg = {
         "version": 2, "task_id": "task_x", "task_name": "T", "batch_id": "batch_y",
-        "run_id": "run_z", "delay": 8,
+        "run_id": "run_z", "brand_id": "ucloud", "delay": 8,
         "units": [{"model_key": "kimi", "question_ids": ["Q1", "Q2"]},
                   {"model_key": "deepseek", "question_ids": ["Q1"]}],
         "questions": [{"id": "Q1", "question": "q1", "category": "c", "question_type": "t",

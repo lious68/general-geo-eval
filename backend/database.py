@@ -841,22 +841,11 @@ async def deactivate_all_questions(brand_id: str = None):
 
 
 async def save_brand_profile(profile: BrandProfile, brand_id: str = None):
-    """更新某品牌档案到 brands 表并刷新缓存。
-    brand_id 为 None 时更新 current 品牌。同时镜像 brand_keywords 兼容旧接口。"""
+    """[已弃用] 更新某品牌档案。新代码请用 db.update_brand(brand_id, profile)。
+    保留是为了兼容旧调用方（settings.brand-profile PUT 兜底现已直接用 update_brand）。"""
     bid = brand_id or await get_current_brand_id()
-    db = await get_db()
-    try:
-        await db.execute(
-            "UPDATE brands SET brand_profile_json=?, brand_name=?, company_name=?, website=?, industry=? "
-            "WHERE id=?",
-            (profile.to_json(), profile.brand_name, profile.company_name,
-             profile.website, profile.industry, bid)
-        )
-        await db.commit()
-    finally:
-        await db.close()
+    await update_brand(bid, profile)
     await set_setting("brand_keywords", json.dumps(profile.keywords, ensure_ascii=False))
-    _BRAND_PROFILE_CACHE[bid] = profile
 
 
 # ============ 品牌库（多品牌） ============

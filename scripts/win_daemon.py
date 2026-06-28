@@ -158,15 +158,48 @@ class WinDaemon:
                 self.current = None
                 self.queue.task_done()
 
-    def _notify(self, msg: str):
-        """Windows 桌面通知（无依赖，用 msg 命令；非 Win 跳过）。"""
-        if sys.platform == "win32":
+    def _notify(self, msg: str, title: str = "WebChat 批次通知"):
+        """Windows 桌面弹窗：屏幕中央置顶信息框，比右下角 toast 醒目。
+
+        用 PowerShell + Windows.Forms MessageBox 弹 SystemModal 信息框：
+          - SystemModal：置顶所有窗口（MB_TOPMOST | MB_SYSTEMMODAL）
+          - MessageBox 自带屏幕居中
+          - 模态阻塞：用户必须点确定才消失，不会一闪而过
+        msg.exe 在多会话/Server 上常弹在右下角且无标题，容易漏看，故改此法。
+        非 Win 环境仅记日志。PowerShell 启动失败回退 msg.exe。
+        """
+        logger.info(f"[通知] {msg}")
+        if sys.platform != "win32":
+            return
+        # PowerShell 单引号 here-string 内不转义 $/backtick，msg 里的单引号需翻倍
+        msg_ps = msg.replace("'", "''")
+        title_ps = title.replace("'", "''")
+        ps_script = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "[System.Windows.Forms.MessageBox]::Show("
+            f"'{msg_ps}', '{title_ps}',"
+            " [System.Windows.Forms.MessageBoxButtons]::OK,"
+            " [System.Windows.Forms.MessageBoxIcon]::Warning,"
+            " [System.Windows.Forms.MessageBoxDefaultButton]::Button1,"
+            " [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly -bor"
+            " [System.Windows.Forms.MessageBoxOptions]::ServiceNotification"
+            ")"
+        )
+        try:
+            import subprocess
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-Command", ps_script],
+                shell=False,
+            )
+        except Exception:
+            # 回退：PowerShell 不可用时用 msg（可能仍弹右下角，但至少有提示）
             try:
                 import subprocess
-                subprocess.Popen(["msg", "*", "/TIME:120", msg], shell=False)
+                subprocess.Popen(["msg", "*", "/TIME:120", f"{title}: {msg}"], shell=False)
             except Exception:
                 pass
-        logger.info(f"[通知] {msg}")
+
 
     async def probe_logins(self, model_keys: list) -> dict:
         """逐模型探登录态：返回 {model_key: bool}。"""

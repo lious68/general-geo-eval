@@ -56,6 +56,44 @@ def _classify_url_type(url: str) -> str:
         return "AI生成的引用"
 
 
+def _extract_cited_urls(r: dict) -> list:
+    """从一条 analysis_result 解析出供前端渲染的引用链接清单。
+
+    all_cited_urls 在库里是 JSON 字符串（或已解析数组），取其中 citation_type=url
+    的项，按 content(URL) 去重，返回 [{content, is_ucloud, source_channel}]。
+    供前端结果展示区把引用渲染成可点链接，而不只是 raw_content 纯文本。
+    """
+    urls_raw = r.get("all_cited_urls", "[]")
+    if isinstance(urls_raw, str):
+        try:
+            urls_list = json.loads(urls_raw)
+        except (json.JSONDecodeError, TypeError):
+            urls_list = []
+    elif isinstance(urls_raw, list):
+        urls_list = urls_raw
+    else:
+        urls_list = []
+    seen = set()
+    out = []
+    for u in urls_list:
+        if not isinstance(u, dict):
+            continue
+        if u.get("citation_type") and u.get("citation_type") != "url":
+            continue
+        c = u.get("content") or u.get("url") or ""
+        if not c or not str(c).startswith("http"):
+            continue
+        if c in seen:
+            continue
+        seen.add(c)
+        out.append({
+            "content": c,
+            "is_ucloud": bool(u.get("is_ucloud")),
+            "source_channel": u.get("source_channel") or _resolve_domain_label(c),
+        })
+    return out
+
+
 def _resolve_domain_label(url: str) -> str:
     """从 URL 提取域名，作为'其他'类的细化标签。"""
     try:
@@ -474,6 +512,7 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
             "has_citation": bool(db.has_effective_citation(r)),
             "response_summary": summary,
             "response_content": response_content,
+            "cited_urls": _extract_cited_urls(r),
             "has_error": has_error,
             "error_message": r.get("error_message") if has_error else None,
         })

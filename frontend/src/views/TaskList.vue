@@ -69,6 +69,14 @@
                           <div v-if="r.error_message" class="result-error"><el-icon><WarningFilled /></el-icon> {{ r.error_message }}</div>
                           <div v-else class="result-ans"><b>模型回答：</b>
                             <pre class="result-pre">{{ r.raw_content || '(空)' }}</pre>
+                            <div v-if="citedUrlsOf(r).length" class="result-cites">
+                              <span class="result-cites-label">📎 引用来源（{{ citedUrlsOf(r).length }}）：</span>
+                              <div v-for="(u, i) in citedUrlsOf(r)" :key="i" class="result-cite-row">
+                                <el-tag v-if="u.is_ucloud" size="small" type="success" effect="dark">UCloud</el-tag>
+                                <el-tag v-else-if="u.source_channel" size="small" type="info" effect="plain">{{ u.source_channel }}</el-tag>
+                                <a :href="u.content" target="_blank" rel="noopener" class="result-cite-link">{{ u.content }}</a>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -311,6 +319,28 @@ async function refreshBatches(taskId) {
 }
 
 function batchResultsOf(batchId) { return batchResultsMap.value[batchId] }
+
+// 解析某条结果的引用链接：all_cited_urls 存的是 JSON 字符串或已解析数组，
+// 取其中的 url 类型引用（content 为 URL）去重后渲染成可点链接。
+function citedUrlsOf(r) {
+  if (!r) return []
+  let urls = r.all_cited_urls
+  if (typeof urls === 'string') {
+    try { urls = JSON.parse(urls) } catch { return [] }
+  }
+  if (!Array.isArray(urls)) return []
+  const seen = new Set()
+  const out = []
+  for (const u of urls) {
+    if (!u || typeof u !== 'object') continue
+    const c = u.content || u.url || ''
+    if (!c || !/^https?:\/\//.test(c)) continue
+    if (seen.has(c)) continue
+    seen.add(c)
+    out.push({ content: c, is_ucloud: !!u.is_ucloud, source_channel: u.source_channel || '' })
+  }
+  return out
+}
 
 async function onBatchExpand(row, expandedRows) {
   // row = batch；只在展开时懒加载该批次结果
@@ -584,6 +614,11 @@ onBeforeUnmount(() => { stopPolling() })
 .result-ans { font-size: 13px; color: #333; }
 .result-error { color: #c0392b; font-size: 13px; display: flex; align-items: center; gap: 4px; }
 .result-pre { white-space: pre-wrap; word-break: break-word; background: #f6f8fa; border-radius: 4px; padding: 8px; max-height: 240px; overflow: auto; margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+.result-cites { margin-top: 6px; padding: 6px 8px; background: #fffbea; border: 1px solid #f5dab1; border-radius: 4px; }
+.result-cites-label { font-size: 12px; color: #b88200; font-weight: 600; }
+.result-cite-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap; }
+.result-cite-link { color: #409eff; font-size: 12px; word-break: break-all; text-decoration: none; }
+.result-cite-link:hover { text-decoration: underline; }
 .last-import-time { font-size: 11px; color: #a8abb2; margin-top: 2px; }
 .import-logs-box { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ebeef5; }
 .import-logs-head { font-size: 13px; color: #555; font-weight: 600; margin-bottom: 8px; }

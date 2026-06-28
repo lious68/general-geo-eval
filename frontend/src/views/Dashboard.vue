@@ -326,6 +326,14 @@
                     </div>
                   </template>
                   <div class="expand-text" v-else style="color:#999">（无回答内容）</div>
+                  <div v-if="(row.cited_urls || []).length" class="expand-cites">
+                    <div class="expand-cites-label">📎 引用来源（{{ row.cited_urls.length }}）：</div>
+                    <div v-for="(u, i) in row.cited_urls" :key="i" class="expand-cite-row">
+                      <el-tag v-if="u.is_ucloud" size="small" type="success" effect="dark">UCloud</el-tag>
+                      <el-tag v-else-if="u.source_channel" size="small" type="info" effect="plain">{{ u.source_channel }}</el-tag>
+                      <a :href="u.content" target="_blank" rel="noopener" class="expand-cite-link">{{ u.content }}</a>
+                    </div>
+                  </div>
                   <div v-if="row.error_message" class="expand-error"><el-icon><WarningFilled /></el-icon> 错误: {{ row.error_message }}</div>
                 </div>
               </template>
@@ -849,4 +857,9 @@ onMounted(loadData)
   max-height: 500px; overflow-y: auto;
 }
 .expand-error { color: #f56c6c; font-size: 12px; margin-top: 6px; display: flex; align-items: center; gap: 4px; }
+.expand-cites { margin-top: 8px; padding: 6px 8px; background: #fffbea; border: 1px solid #f5dab1; border-radius: 4px; }
+.expand-cites-label { font-size: 12px; color: #b88200; font-weight: 600; margin-bottom: 3px; }
+.expand-cite-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap; }
+.expand-cite-link { color: #409eff; font-size: 12px; word-break: break-all; text-decoration: none; }
+.expand-cite-link:hover { text-decoration: underline; }
 </style>

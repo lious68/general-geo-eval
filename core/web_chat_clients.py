@@ -1685,7 +1685,22 @@ class QwenWebChatClient(WebChatClientBase):
         )
 
     async def _extract_response(self, page: Page) -> str:
-        """提取千问响应文本"""
+        """提取千问响应文本，包括正文 + 参考资料引用源
+
+        千问正文是 `<div class="qk-markdown">` 渲染的 Markdown。
+        参考资料面板「X篇来源」里每条来源**不是** `<a href>`，而是一个 favicon
+        代理 `<img>`（神马搜索 `http://s2.zimgs.cn/ims?...&key=<base64>`），
+        base64(key) 解码后是 `https://<来源域名>/favicon.ico`。来源真实域名
+        还会出现在卡片标题文本里（形如 `标题 www.ucloud.cn 2026年06月23日 - 摘要`）。
+
+        证据：scripts/diag_qwen_refs.py —— 原版 `querySelectorAll('a[href]')`
+        返回 0，导致 citation_rate 被系统性记 0。这里锚定 `[class*="reference-wrap"]`
+        容器，对每条来源重建 `https://<host>` 作为引用 URL append 进文本，
+        analyzer 通用 URL 正则会自动收录进 all_cited_urls/citations。
+
+        宁缺毋滥：神马搜索 CDN 快照（sm.cn/zimgs.cn）且标题无真实域名的不收，
+        避免把搜索缓存当引用（同 Kimi 页脚假阳性的教训）。
+        """
         try:
             response_area = page.locator(self.RESPONSE_SELECTOR).last
             await response_area.wait_for(state="visible", timeout=10000)
@@ -1694,30 +1709,99 @@ class QwenWebChatClient(WebChatClientBase):
 
         text = await response_area.inner_text()
 
-        links = await response_area.evaluate("""
-            el => {
-                const links = el.querySelectorAll('a[href]');
-                return Array.from(links).map(a => ({
-                    text: a.textContent.trim(),
-                    href: a.href
-                }));
-            }
-        """)
-
+        links = await self._extract_qwen_reference_links(page)
         if links:
             citation_lines = []
             for i, link in enumerate(links):
-                href = link["href"]
-                if href.startswith("javascript:") or href.startswith("#"):
+                href = link.get("href", "")
+                if not href or href.startswith("javascript:") or href.startswith("#"):
                     continue
+                # 排除千问站内跳转与阿里域
                 if "qianwen.com" in href and "/chat" in href:
                     continue
-                link_text = link["text"] or f"[{i+1}]"
+                if "aliyun.com" in href:
+                    continue
+                link_text = link.get("text") or f"[{i+1}]"
                 citation_lines.append(f"[{i+1}] {link_text}: {href}")
             if citation_lines:
                 text += "\n\n---\n引用来源:\n" + "\n".join(citation_lines)
 
         return text
+
+    async def _extract_qwen_reference_links(self, page: Page) -> list:
+        """锚定千问「X篇来源」参考资料面板，重建每条来源的真实 URL。
+
+        策略（证据 diag_qwen_refs.py）：
+        1) 先尝试点开「N篇来源」折叠面板，让全部来源项渲染。
+        2) 对面板内每个 favicon `<img src*="key=">`，用 atob 解码 key 得到
+           `https://<host>/favicon.ico`，取其 host 重建 `https://<host>`。
+        3) 同时从来源卡片的标题文本里正则提取真实域名（标题里会出现
+           `www.ucloud.cn 2026年06月23日` 这类），作为更准确的来源域。
+           标题域名优先于 favicon 域名（favicon 可能是 CDN 代理）。
+        4) 跳过神马搜索快照（sm.cn / zimgs.cn / cdn.sm.cn）且标题无真实域名的项。
+        全程 best-effort，任何异常返回 []。
+        """
+        try:
+            # 1) 展开「N篇来源」
+            try:
+                for sel in [page.get_by_text('篇来源', exact=False),
+                            page.locator('[class*="reference-wrap"]')]:
+                    try:
+                        if await sel.first.is_visible(timeout=2000):
+                            await sel.first.click(timeout=2500)
+                            await asyncio.sleep(1.2)
+                            break
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"WebChat qwen: 展开'来源'面板失败(可忽略): {e}")
+
+            # 2)+3) 收集每条来源：favicon key 解码 + 标题域名提取
+            links = await page.evaluate("""() => {
+              const out = [];
+              const HOST_RE = /((?:[a-z0-9-]+\\.)+[a-z]{2,}(?::\\d+)?)/i;
+              const SKIP = ['zimgs.cn','sm.cn','smzdm.com','aliyuncs.com'];
+              // 全部带 key= 的 favicon 代理 img（每条来源一个）
+              const imgs = document.querySelectorAll('img[src*="key="]');
+              imgs.forEach(img => {
+                let host = '';
+                // a) 解码 favicon key
+                const m = img.src.match(/key=([A-Za-z0-9+/=_-]+)/);
+                if (m) {
+                  try {
+                    let k = m[1];
+                    k += '='.repeat((4 - k.length % 4) % 4);
+                    const fav = atob(k);
+                    const hm = fav.match(HOST_RE);
+                    if (hm) host = hm[1];
+                  } catch(e) {}
+                }
+                // b) 取来源卡片标题文本，正则提取域名（优先于 favicon host）
+                let card = img.closest('[class*="reference-wrap"],[class*="link-title"],[class*="search-content"],[class*="source-item"],li,[class*="item"]') || img.parentElement;
+                let title = (card ? card.textContent : '') || '';
+                title = title.replace(/\\s+/g,' ').trim().slice(0, 200);
+                const tm = title.match(HOST_RE);
+                let titleHost = tm ? tm[1] : '';
+                // 标题域名优先（favicon 可能是 CDN/代理域）
+                const finalHost = titleHost || host;
+                if (!finalHost) return;
+                if (SKIP.some(s => finalHost.includes(s))) return;
+                // 去掉 favicon host 里的常见干扰（保留主域）
+                out.push({
+                  href: 'https://' + finalHost,
+                  text: title.slice(0, 80) || finalHost,
+                });
+              });
+              // 去重 by href
+              const seen = new Set(); const uniq = [];
+              for (const r of out) { if (!seen.has(r.href)) { seen.add(r.href); uniq.push(r); } }
+              return uniq;
+            }""")
+            logger.info(f"WebChat qwen: reference links decoded: {len(links)}")
+            return links or []
+        except Exception as e:
+            logger.warning(f"WebChat qwen: 提取参考资料链接失败: {e}")
+            return []
 
     async def _start_new_chat(self, page: Page):
         """开始新对话"""

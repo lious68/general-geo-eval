@@ -975,27 +975,94 @@ class ErnieWebChatClient(WebChatClientBase):
         await asyncio.sleep(3)
 
     async def _type_question(self, page: Page, question: str):
-        """在输入框中输入问题（chat.baidu.com 优先 #chat-textarea，避免命中隐藏 textarea）"""
+        """在输入框中输入问题（chat.baidu.com 优先 #chat-textarea，避免命中隐藏 textarea）。
+
+        chat.baidu.com(aipan 新版)新对话页会在输入框上方浮一个「最近/推荐」面板
+        (._recent_zztvf_1)，它 intercept pointer events，导致 #chat-textarea 的普通
+        click 30s 超时——表现为「跑完一题后无法建对话」
+        （runner_global.log 18:30:44 error: subtree intercepts pointer events）。
+        对策：先按 Esc/点遮罩关浮层，再 click(force=True) 绕过残留拦截（与豆包同模式）。
+        """
+        # 1) 关掉首屏/新对话页可能弹出的「最近/推荐」浮层与遮罩
+        try:
+            for sel in [
+                "[role='dialog'] [class*='close']",
+                "[role='dialog'] button[aria-label*='关闭']",
+                "[role='dialog'] button[aria-label*='Close']",
+                "div[class*='mask'], div[class*='overlay'], div[class*='backdrop']",
+                "div[class*='_recent'], div[class*='recent']",  # chat.baidu.com 最近/推荐浮层
+            ]:
+                try:
+                    m = page.locator(sel).first
+                    if await m.is_visible(timeout=1000):
+                        await m.click(timeout=1500)
+                        await asyncio.sleep(0.3)
+                except Exception:
+                    pass
+            # Esc 兜底关浮层（最可靠，不依赖具体关闭按钮）
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.3)
+        except Exception:
+            pass
+
+        # 2) 定位输入框（优先 #chat-textarea，避免命中隐藏 textarea）
         input_el = page.locator("#chat-textarea")
         try:
             await input_el.wait_for(state="visible", timeout=8000)
         except Exception:
             input_el = page.locator(self.INPUT_SELECTOR).first
             await input_el.wait_for(state="visible", timeout=5000)
-        await input_el.click()
+
+        # 3) 聚焦输入框。chat.baidu.com(aipan)开过对话后再回新对话页，会显示「最近」
+        #    面板(._recent_zztvf_1)，此时 #chat-textarea 的 CSS pointer-events:none
+        #    （实测 taPointerEvents='none'）——它是装饰性、不可点的。click(force=True)
+        #    虽绕过 Playwright 可点性检查，但真实鼠标点击会穿透 textarea 落到下层
+        #    最近面板，textarea 不获焦 → keyboard.type 输入丢失 → 表现为「跑完一题后
+        #    无法建对话/第二题输不进去」。.focus() 经 JS 调用不受 pointer-events
+        #    限制，能把 textarea 设为 activeElement，随后 keyboard.type 的按键事件
+        #    即落在此 textarea（React onChange 正常激活发送按钮）。
+        try:
+            await input_el.click(force=True)
+        except Exception:
+            pass
+        try:
+            await page.evaluate(
+                "(el) => { if (el && document.activeElement !== el) el.focus(); }",
+                await input_el.element_handle(),
+            )
+        except Exception:
+            try:
+                await input_el.focus(timeout=5000)
+            except Exception:
+                pass
         await asyncio.sleep(0.3)
         await page.keyboard.type(question, delay=30)
 
     async def _send_question(self, page: Page):
-        """发送问题（优先按 Enter，更可靠）"""
+        """发送问题（优先按 Enter，更可靠）。
+
+        chat.baidu.com(aipan)在「最近」面板展开态下，#chat-textarea 的
+        pointer-events:none（实测 taPointerEvents='none'）——它是装饰性、不可点击。
+        _type_question 已用 .focus() 把它设为 activeElement，但若 focus 失败/被
+        React 抢焦，按 Enter 可能落到 body 而非 textarea。这里发 Enter 前先确保
+        activeElement 是 textarea，否则点击发送按钮（pointer-events:auto 的真实按钮）兜底。
+        """
         try:
             send_btn = page.locator(self.SEND_SELECTOR).first
             if await send_btn.is_visible(timeout=3000):
                 await send_btn.click()
-            else:
-                await page.keyboard.press("Enter")
+                return
         except Exception:
-            await page.keyboard.press("Enter")
+            pass
+        # 确保 textarea 是 activeElement 再按 Enter（_type_question 的 focus 可能失效）
+        try:
+            await page.evaluate(
+                "() => { const ta = document.querySelector('#chat-textarea');"
+                "  if (ta && document.activeElement !== ta) ta.focus(); }"
+            )
+        except Exception:
+            pass
+        await page.keyboard.press("Enter")
 
     async def _wait_for_response(self, page: Page, timeout: int = 180):
         """等待文心一言响应完成
@@ -1159,7 +1226,14 @@ class ErnieWebChatClient(WebChatClientBase):
         return text
 
     async def _start_new_chat(self, page: Page):
-        """开始新对话"""
+        """开始新对话。
+
+        chat.baidu.com(aipan 新版)新对话页会自动展开「最近/推荐」浮层
+        (._recent_zztvf_1，铺满输入框上方 200..1280×118..800)，它 intercept
+        pointer events → 下一题 #chat-textarea.click 30s 超时，表现为「跑完一题
+        后无法建对话/无法输入第二题」（runner_global.log 18:30:44 实测复现）。
+        所以开新对话后主动关掉该浮层再返回，让 _type_question 的输入框可点。
+        """
         try:
             new_btn = page.locator(self.NEW_CHAT_SELECTOR).first
             if await new_btn.is_visible(timeout=3):
@@ -1171,6 +1245,25 @@ class ErnieWebChatClient(WebChatClientBase):
         except Exception:
             await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
+
+        # 关掉新对话页弹出的「最近/推荐」浮层 + 遮罩，恢复输入框可点。
+        # _recent 浮层无关闭按钮、点它自身会跳转历史会话，故用 Esc + 遮罩点击。
+        try:
+            for sel in [
+                "div[class*='mask'], div[class*='overlay'], div[class*='backdrop']",
+                "div[class*='_recent'], div[class*='recent'] [class*='close']",
+            ]:
+                try:
+                    m = page.locator(sel).first
+                    if await m.is_visible(timeout=800):
+                        await m.click(timeout=1200)
+                        await asyncio.sleep(0.3)
+                except Exception:
+                    pass
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.3)
+        except Exception:
+            pass
 
 
 class DoubaoWebChatClient(WebChatClientBase):

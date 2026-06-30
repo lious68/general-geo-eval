@@ -1228,25 +1228,49 @@ class ErnieWebChatClient(WebChatClientBase):
     async def _start_new_chat(self, page: Page):
         """开始新对话。
 
-        chat.baidu.com(aipan 新版)新对话页会自动展开「最近/推荐」浮层
-        (._recent_zztvf_1，铺满输入框上方 200..1280×118..800)，它 intercept
-        pointer events → 下一题 #chat-textarea.click 30s 超时，表现为「跑完一题
-        后无法建对话/无法输入第二题」（runner_global.log 18:30:44 实测复现）。
-        所以开新对话后主动关掉该浮层再返回，让 _type_question 的输入框可点。
-        """
-        try:
-            new_btn = page.locator(self.NEW_CHAT_SELECTOR).first
-            if await new_btn.is_visible(timeout=3):
-                await new_btn.click()
-                await asyncio.sleep(2)
-            else:
-                await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
-                await asyncio.sleep(3)
-        except Exception:
-            await page.goto("https://chat.baidu.com", wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(3)
+        用「整页硬导航到 chat.baidu.com/」开新对话，**不点「新建对话」按钮**。
 
-        # 关掉新对话页弹出的「最近/推荐」浮层 + 遮罩，恢复输入框可点。
+        证据（diag_ernie_newchat_paths）：
+          跑完一题后 URL=/search/<id>、abCount=2（页面上有 2 个旧 answer-box）。
+          - 点「新建对话」按钮 → URL=/aipan，abCount=2（**旧 answer-box 残留！**）
+          - 硬 goto chat.baidu.com/ → URL=/，abCount=0（干净）
+          - 硬 goto chat.baidu.com/aipan → URL=/aipan，abCount=0（也干净）
+
+        旧逻辑优先点按钮 → 跳 /aipan 但旧答案框不归零。残留的旧 answer-box 让
+        _wait_for_response 取「最后一个 answer-box」时命中上一题的旧框/空 wrapper
+        （RECEIVER_SELECTOR .last 正是 line929-932 注释记录的空 wrapper 陷阱），
+        _wait_until_no_progress_markers 读旧框文本 4 字立即放行（thinking ended 4chars）、
+        _wait_for_text_stability 对旧框 last_length=0 恒不变 → 120s 超时 → 响应记 0 字
+        （runner_global.log 14:15:38~14:18:10 实测 q020 卡死）。
+        硬导航整页重载会撕掉 SPA 旧 DOM，abCount 归 0，彻底隔离上一题上下文
+        （与 DoubaoWebChatClient._start_new_chat 的硬导航 /chat 同模式）。
+        """
+        # 关掉首屏可能弹出的遮罩（登录引导/dialog），避免拦截后续交互
+        try:
+            for sel in [
+                "[role='dialog'] [class*='close']",
+                "[role='dialog'] button[aria-label*='关闭']",
+                "div[class*='mask'], div[class*='overlay'], div[class*='backdrop']",
+            ]:
+                try:
+                    m = page.locator(sel).first
+                    if await m.is_visible(timeout=1000):
+                        await m.click(timeout=1500)
+                        await asyncio.sleep(0.3)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 硬导航到新对话页根 URL（整页重载，撕掉 SPA 旧会话 DOM，answer-box 归零）
+        try:
+            await page.goto("https://chat.baidu.com/", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
+            logger.info("WebChat ernie: 已硬导航 / 开新对话")
+        except Exception as e:
+            logger.warning(f"WebChat ernie: goto / 失败: {e}")
+
+        # 关掉新对话页自动展开的「最近/推荐」浮层 + 遮罩，恢复输入框可点。
         # _recent 浮层无关闭按钮、点它自身会跳转历史会话，故用 Esc + 遮罩点击。
         try:
             for sel in [

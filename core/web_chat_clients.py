@@ -1803,8 +1803,18 @@ class QwenWebChatClient(WebChatClientBase):
     async def _wait_for_response(self, page: Page, timeout: int = 120):
         """等待千问响应完成
 
-        千问有思考/研究模式，会联网搜索。
-        先检测搜索指示器，再等文本稳定。
+        千问有思考/研究模式，搜索型题会联网搜索（先等搜索指示器消失）。
+        非搜索直答题有"慢启动"陷阱：先吐 4 字前缀（如"关于国内"）再停顿
+        1-3s 才继续流式输出。基类 _wait_for_text_stability 默认 stable_threshold=2
+        （2s 不增长即稳定）会在慢启动停顿期误判完成 → 只抓到 ~70 字半截答案
+        （句尾"国内头"被截断），浏览器"一闪而过"。
+        证据：batch_20260701_133519 q010-q016 全部"response stable after 3s
+        (2 checks, 4 chars)" → 长度 72/74/89/74/97/79/101 字（均截断）；
+        同期搜索型题 q003/q004 等"stable after 13-17s (数百 chars)"正常。
+
+        修复：先等正文越过慢启动门槛（≥ MIN_FLOW 字，确认已过 4 字停顿期），
+        再跑 stability，并把 stable_threshold 提到 3 吞掉中途小停顿。
+        极短答案（<MIN_FLOW 且 6s 不再增长）直接判定完成，不卡满超时。
         """
         try:
             search_indicator = page.locator(self.SEARCH_INDICATOR).first
@@ -1820,8 +1830,40 @@ class QwenWebChatClient(WebChatClientBase):
         except Exception:
             await asyncio.sleep(10)
 
+        # ── 慢启动门槛：等正文越过 4 字前缀停顿期 ──
+        # 与 _wait_for_text_stability 同口径：querySelectorAll(sel).last.innerText
+        MIN_FLOW = 40
+        len_js = (
+            "(sel) => {"
+            "  const els = document.querySelectorAll(sel);"
+            "  if (!els.length) return 0;"
+            "  return (els[els.length - 1]?.innerText || '').length;"
+            "}"
+        )
+        elapsed = 0
+        last_len = -1
+        short_stable = 0
+        while elapsed < 40:
+            try:
+                cur = await page.evaluate(len_js, self.RESPONSE_SELECTOR)
+            except Exception:
+                cur = 0
+            if cur >= MIN_FLOW:
+                logger.info(f"WebChat qwen: answer flowing ({cur} chars)")
+                break
+            if cur > 0 and cur == last_len:
+                short_stable += 1
+                if short_stable >= 6:
+                    logger.info(f"WebChat qwen: short answer settled ({cur} chars)")
+                    return True
+            else:
+                short_stable = 0
+                last_len = cur
+            await asyncio.sleep(1)
+            elapsed += 1
+
         await self._wait_for_text_stability(
-            page, self.RESPONSE_SELECTOR, timeout=timeout
+            page, self.RESPONSE_SELECTOR, timeout=timeout, stable_threshold=3
         )
 
     async def _extract_response(self, page: Page) -> str:

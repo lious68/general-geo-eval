@@ -502,45 +502,90 @@ class KimiWebChatClient(WebChatClientBase):
         await self._wait_for_kimi_text_stability(page, timeout=timeout)
 
     async def _wait_for_kimi_text_stability(self, page: Page, timeout: int = 120):
-        """Kimi 专用文本稳定性检查 — 不依赖单一 CSS 选择器"""
-        start_text_len = await page.evaluate("""() => {
-            // 优先取聊天内容区域
-            const chatArea = document.querySelector(
-                '.chat-content, [class*="chat-content"], [class*="conversation"], main'
-            ) || document.body;
-            const text = chatArea.innerText || '';
-            return text.length;
-        }""")
-        logger.info(f"WebChat kimi: waiting for response (initial text: {start_text_len} chars)")
+        """Kimi 专用文本稳定性检查 — 锚定 segment-assistant，区分搜索面板与正文
+
+        Kimi 流程：user 题 → "我来搜索一下…" → 搜索面板（"搜索网页\\n<关键词>\\nN个结果"）
+        → 搜索停顿 → 正文（segment 内的 [class*="markdown"]）流式输出。
+        0630 q020/q028/q036 坏题根因：旧实现用 chatArea.innerText 长度判稳定，搜索面板
+        渲染完（~50-110 字）后在搜索停顿期连续 3 次不增长 → 误判完成，只抓到搜索面板，
+        正文（944+ 字）全丢。
+
+        修复（与 qwen/doubao 慢启动同思路，加搜索面板识别）：
+        - 锚定最后一个 segment-assistant，取其 innerText 长度 + 其内 markdown 正文长度。
+        - "已起笔" = 正文 markdown 出现（md_len>30）或 文本越过搜索面板门槛（≥150 且非纯搜索面板）。
+        - 未起笔时：若仍是搜索面板（含"搜索网页/个结果"且无 markdown），**不**触发短答案兜底，
+          继续等搜索完成出正文（这是关键——旧兜底会在搜索停顿期误判）。
+        - 起笔后跑稳定性（3 次不增长=完成）；纯短直答（无搜索面板、<门槛、稳定 6s）才兜底完成。
+        """
+        get_seg_js = """() => {
+          const segs = document.querySelectorAll('segment.segment-assistant, .segment-assistant');
+          const seg = segs.length ? segs[segs.length - 1] : null;
+          if (!seg) return { len: 0, has_md: false, md_len: 0, has_search: false, head: '' };
+          const txt = seg.innerText || '';
+          const md = seg.querySelector('[class*="markdown"], .markdown-container');
+          const mdLen = md ? (md.innerText || '').length : 0;
+          return {
+            len: txt.length,
+            has_md: !!md,
+            md_len: mdLen,
+            has_search: /搜索网页|个结果/.test(txt),
+            head: txt.slice(0, 40),
+          };
+        }"""
+
+        MIN_FLOW = 150  # 搜索面板通常 50-110 字，正文 900+；越过此门槛才算正文起笔
+        start = await page.evaluate(get_seg_js)
+        start_len = start.get("len", 0)
+        logger.info(f"WebChat kimi: waiting for response (initial seg text: {start_len} chars, "
+                    f"md={start.get('md_len')}, search={start.get('has_search')})")
 
         stable_count = 0
-        prev_len = start_text_len
+        prev_len = start_len
         elapsed = 0
         interval = 3
+        short_stable = 0  # 未起笔时的短答案稳定计数
 
         while elapsed < timeout:
             await asyncio.sleep(interval)
             elapsed += interval
+            try:
+                st = await page.evaluate(get_seg_js)
+            except Exception:
+                st = {"len": 0, "md_len": 0, "has_search": False}
+            cur_len = st.get("len", 0)
+            md_len = st.get("md_len", 0)
+            has_search = st.get("has_search", False)
 
-            current_len = await page.evaluate("""() => {
-                const chatArea = document.querySelector(
-                    '.chat-content, [class*="chat-content"], [class*="conversation"], main'
-                ) || document.body;
-                return (chatArea.innerText || '').length;
-            }""")
-            logger.info(f"WebChat kimi: text len after {elapsed}s: {current_len} chars")
+            # 起笔判定：正文 markdown 出现 或 文本越过门槛且非纯搜索面板
+            flowed = (md_len > 30) or (cur_len >= MIN_FLOW and not has_search)
 
-            # 流式输出：每次增长至少 30 字才算在生成
-            if current_len > prev_len + 30:
-                stable_count = 0
-                prev_len = current_len
+            if flowed:
+                if cur_len > prev_len:
+                    stable_count = 0
+                    prev_len = cur_len
+                else:
+                    stable_count += 1
+                    if stable_count >= 3:
+                        await asyncio.sleep(2)  # 让引用卡片加载
+                        logger.info(f"WebChat kimi: response complete ({cur_len} chars, md={md_len})")
+                        return
             else:
-                stable_count += 1
-                if stable_count >= 3:
-                    # 额外等 2 秒让引用卡片加载
-                    await asyncio.sleep(2)
-                    logger.info(f"WebChat kimi: response complete ({current_len} chars)")
-                    return
+                # 未起笔：搜索面板在搜索中 → 不兜底，继续等正文
+                if has_search and md_len == 0:
+                    short_stable = 0
+                    prev_len = cur_len
+                    continue
+                # 非搜索面板的短文本：连续 6s 不增长判完成（纯短直答兜底）
+                if cur_len > 0 and cur_len == prev_len:
+                    short_stable += 1
+                    if short_stable >= 2:
+                        logger.info(f"WebChat kimi: short answer settled ({cur_len} chars)")
+                        return
+                else:
+                    short_stable = 0
+                    prev_len = cur_len
+
+        logger.warning(f"WebChat kimi: response timeout after {timeout}s, seg_len={prev_len}")
 
     async def _extract_response(self, page: Page) -> str:
         """提取 Kimi 响应文本，包括引用链接

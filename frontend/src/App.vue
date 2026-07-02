@@ -42,6 +42,10 @@
           <el-icon><Document /></el-icon>
           <span>问题管理</span>
         </el-menu-item>
+        <el-menu-item index="/metric-guide">
+          <el-icon><Reading /></el-icon>
+          <span>指标说明</span>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>

@@ -9,6 +9,7 @@ const routes = [
   { path: '/tasks', name: 'TaskList', component: () => import('../views/TaskList.vue') },
   { path: '/tasks/:taskId', name: 'TaskDetail', component: () => import('../views/TaskDetail.vue') },
   { path: '/questions', name: 'Questions', component: () => import('../views/Questions.vue') },
+  { path: '/metric-guide', name: 'MetricGuide', component: () => import('../views/MetricGuide.vue') },
   { path: '/history', name: 'History', component: () => import('../views/History.vue') },
   { path: '/citation-sources', name: 'CitationSources', component: () => import('../views/CitationSources.vue') },
   { path: '/settings', name: 'Settings', component: () => import('../views/Settings.vue') },

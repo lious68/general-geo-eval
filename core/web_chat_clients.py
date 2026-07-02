@@ -54,6 +54,9 @@ class WebChatClientBase:
         self._browser = None
         self._context = None
         self._page = None
+        # 本次题干（chat() 在 _type_question 前设置），供子类 _extract_response /
+        # _wait_for_response 锚定「本次 user 气泡」，避开上一题残留气泡与题干回显。
+        self._last_question: str = ""
 
     async def initialize(self, fresh: bool = False) -> bool:
         """启动浏览器（在评测开始时调用一次）
@@ -137,6 +140,10 @@ class WebChatClientBase:
             # 每道题前重置对话
             logger.info(f"WebChat {self.model_key}: 重置对话 → 准备提问: {q_preview}")
             await self._start_new_chat(self._page)
+
+            # 记录本次题干，供 _extract_response / _wait_for_response 锚定「本次 user 气泡」，
+            # 避免抓到上一题残留 assistant 气泡（串题）或 user 题干回显（空回声）。
+            self._last_question = question
 
             # 输入问题
             logger.info(f"WebChat {self.model_key}: 输入问题: {q_preview}")
@@ -1418,44 +1425,109 @@ class DoubaoWebChatClient(WebChatClientBase):
     async def _wait_for_response(self, page: Page, timeout: int = 120):
         """等待豆包响应完成
 
-        策略：定期检查文本增长 + 稳定性。
-        豆包的搜索元数据（"搜索X个关键词 参考XX篇资料"）
-        在回答完成后出现在响应区域顶部。
-        不依赖 CSS 选择器匹配（豆包 DOM 结构不确定）。
-        """
-        # 等 AI 生成回答，定期检查文本增长
-        start_text_len = await self._get_visible_text_len(page)
-        logger.info(f"WebChat doubao: waiting for response (initial text: {start_text_len} chars)")
+        豆包 DOM 结构（diag_doubao_bubble2.py 实测）：
+          message-list > v_list-D34x3M > ... > list_items > 多个 `v_list_row` div
+          其中首个 `v_list_row` 是 user 题干气泡（innerText ≈ 题干，~14 字），
+          其后第二个 `v_list_row` 是 assistant 回答气泡（含「搜索N关键词参考X篇资料」+正文）。
 
-        max_wait = 90  # 最多等 90 秒
+        旧实现用 `_get_visible_text_len`（TreeWalker 扫全 document.body），user 气泡一渲染
+        全页文本就稳定 → 直答题误判完成、抓到 user 题干回显（0630 的 12 个空回声）。
+        改为：只盯「本次 assistant 气泡」（题干 row 之后的下一个 v_list_row）的 innerText
+        增长，并要求越过慢启动门槛才算「真起笔」，再判稳定性；与 qwen 慢启动修复同思路。
+        """
+        question = (self._last_question or "").strip()
+
+        # JS：定位本次 assistant 气泡，返回其 innerText 长度 + 是否含搜索元数据。
+        # 定位策略：在 message-list 内逐行看 v_list_row，找文本含本次题干的行作为 user 行，
+        # 取其后的下一个非空 v_list_row 作为 assistant 行（兜底：取最后一个 v_list_row）。
+        get_assistant_js = """(question) => {
+          const ml = document.querySelector('[class*="message-list"]');
+          if (!ml) return { len: 0, has_meta: false, found: false, rows: 0 };
+          const rows = Array.from(ml.querySelectorAll('[class*="v_list_row"]'));
+          const q = (question || '').trim();
+          // 找本次 user 行：文本以题干开头（豆包 user 气泡常含题干原文）
+          let userIdx = -1;
+          if (q) {
+            for (let i = 0; i < rows.length; i++) {
+              const t = (rows[i].innerText || '').trim();
+              if (t.startsWith(q) || t.includes(q)) { userIdx = i; break; }
+            }
+          }
+          // assistant 行 = user 行之后的下一个非空 v_list_row；找不到则取最后一个非空行
+          let asst = null;
+          for (let i = userIdx + 1; i < rows.length; i++) {
+            if ((rows[i].innerText || '').trim().length > 0) { asst = rows[i]; break; }
+          }
+          if (!asst) {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              if ((rows[i].innerText || '').trim().length > 0) { asst = rows[i]; break; }
+            }
+          }
+          if (!asst) return { len: 0, has_meta: false, found: false, rows: rows.length };
+          const txt = asst.innerText || '';
+          return {
+            len: txt.length, found: true, rows: rows.length,
+            has_meta: /搜索\\s*\\d+\\s*个?关键词/.test(txt) || /参考(?:了)?\\s*\\d+\\s*篇/.test(txt) || /找到\\s*\\d+\\s*篇/.test(txt),
+            head: txt.slice(0, 40),
+          };
+        }"""
+
+        # 慢启动门槛：assistant 文本越过此长度（或含搜索元数据）才算「真起笔」
+        MIN_FLOW = 40
+        max_wait = timeout if timeout > 0 else 90
         elapsed = 0
-        stable_count = 0  # 连续稳定次数
-        prev_len = start_text_len
+        prev_len = 0
+        stable_count = 0
+        flowed = False
 
         while elapsed < max_wait:
-            await asyncio.sleep(5)
-            elapsed += 5
+            await asyncio.sleep(2)
+            elapsed += 2
+            try:
+                st = await page.evaluate(get_assistant_js, question)
+            except Exception:
+                st = {"len": 0, "found": False, "has_meta": False}
+            cur_len = st.get("len", 0)
+            has_meta = st.get("has_meta", False)
 
-            current_len = await self._get_visible_text_len(page)
-            logger.info(f"WebChat doubao: text len after {elapsed}s: {current_len} chars")
+            # 起笔判定：越过门槛 或 已含搜索元数据（搜索题先出元数据再出正文）
+            if not flowed and (cur_len >= MIN_FLOW or has_meta):
+                flowed = True
+                logger.info(f"WebChat doubao: assistant flowing ({cur_len} chars, meta={has_meta})")
 
-            if current_len > prev_len:
-                # 文本还在增长，重置稳定计数
-                stable_count = 0
-                prev_len = current_len
+            if flowed:
+                if cur_len > prev_len:
+                    stable_count = 0
+                    prev_len = cur_len
+                else:
+                    stable_count += 1
+                    # stable_threshold=3：连续 3 次（6秒）不增长判完成；吞中途停顿
+                    if stable_count >= 3:
+                        # 额外等 3 秒让引用卡片加载
+                        await asyncio.sleep(3)
+                        final = await page.evaluate(get_assistant_js, question)
+                        logger.info(f"WebChat doubao: response complete ({final.get('len', 0)} chars)")
+                        return
             else:
-                # 文本没有增长，增加稳定计数
-                stable_count += 1
-                if stable_count >= 2:
-                    # 文本连续 2 次检查（10秒）没有变化，认为完成
-                    # 额外等 3 秒让搜索元数据卡片加载
-                    await asyncio.sleep(3)
-                    final_len = await self._get_visible_text_len(page)
-                    logger.info(f"WebChat doubao: response complete ({final_len} chars)")
-                    return
+                # 未起笔：极短答案兜底——若 assistant 已有少量文本且连续 6s 不增长，判完成
+                if cur_len > 0 and cur_len == prev_len:
+                    stable_count += 1
+                    if stable_count >= 3 and cur_len < MIN_FLOW:
+                        logger.info(f"WebChat doubao: short answer settled ({cur_len} chars)")
+                        return
+                else:
+                    stable_count = 0
+                    prev_len = cur_len
+
+        logger.warning(f"WebChat doubao: response timeout after {max_wait}s, asst_len={prev_len}")
+        return
 
     async def _get_visible_text_len(self, page: Page) -> int:
-        """用 JS 提取页面可见文本长度（排除 UI 元素）"""
+        """用 JS 提取页面可见文本长度（排除 UI 元素）
+
+        保留供诊断用；_wait_for_response 已改用「本次 assistant 气泡」长度，
+        不再依赖此全页文本长度（旧实现因 user 气泡稳定误判完成）。
+        """
         try:
             text = await page.evaluate("""() => {
                 const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
@@ -1488,33 +1560,78 @@ class DoubaoWebChatClient(WebChatClientBase):
     async def _extract_response(self, page: Page) -> str:
         """提取豆包响应文本，包括引用链接和搜索元数据
 
-        豆包的联网搜索引用源是页面下方「搜索N个关键词，参考X篇资料」折叠卡片
-        里的 `<a href>`（每篇资料一个链接，标题+URL），不在主回答气泡内。
-        证据（diag_doubao_refs.py 采集）：这些链接共同祖先为
-        `div.container-SIvZXF ... > a.flex-row.max-w-full.min-w-0`，
-        无 iframe / shadow DOM，且页面默认就渲染了（不用点展开也能抓到）。
-        故这里锚定该卡片容器取链接，避免把页脚/导航当引用（Kimi 式假阳性）。
-        """
-        text = ""
-        links = []
+        豆包 DOM 结构（diag_doubao_bubble2.py 实测）：
+          message-list > v_list-D34x3M > ... > list_items > 多个 `v_list_row` div
+          - 首个 v_list_row：user 题干气泡（innerText ≈ 题干，~14 字）
+          - 其后 v_list_row：assistant 回答气泡（含「搜索N关键词参考X篇资料」+正文+引用）
+        旧 RESPONSE_SELECTOR（message-content/markdown/assistant/...）6 个子选择器实测全
+        count=0 → 主路径必死、全靠 TreeWalker 抓整个 message-list（混抓 user 回显 +
+        上一题残留 assistant 气泡 + 首页推荐流），导致 0630 的串题/空回声/首页噪声。
 
-        # 1) 尝试用 RESPONSE_SELECTOR 定位响应区域取正文
+        改为锚定「本次 user 气泡之后的 assistant 气泡」取 innerText，杜绝串题与空回声。
+        引用链接仍由 _extract_doubao_reference_links 锚定资料卡片抓取（上次修复成果）。
+        """
+        question = (self._last_question or "").strip()
+        text = ""
+
+        # 1) 锚定本次 assistant 气泡取正文
+        #    定位策略与 _wait_for_response 一致：找含本次题干的 user v_list_row，取其后
+        #    第一个非空 v_list_row 作为 assistant 气泡。
+        extract_assistant_js = """(question) => {
+          const ml = document.querySelector('[class*="message-list"]');
+          if (!ml) return { text: '', found: false };
+          const rows = Array.from(ml.querySelectorAll('[class*="v_list_row"]'));
+          const q = (question || '').trim();
+          let userIdx = -1;
+          if (q) {
+            for (let i = 0; i < rows.length; i++) {
+              const t = (rows[i].innerText || '').trim();
+              if (t.startsWith(q) || t.includes(q)) { userIdx = i; break; }
+            }
+          }
+          let asst = null;
+          for (let i = userIdx + 1; i < rows.length; i++) {
+            if ((rows[i].innerText || '').trim().length > 0) { asst = rows[i]; break; }
+          }
+          if (!asst) {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              if ((rows[i].innerText || '').trim().length > 0) { asst = rows[i]; break; }
+            }
+          }
+          if (!asst) return { text: '', found: false, rows: rows.length };
+          return { text: asst.innerText || '', found: true, rows: rows.length, user_idx: userIdx };
+        }"""
         try:
-            response_area = page.locator(self.RESPONSE_SELECTOR).last
-            await response_area.wait_for(state="visible", timeout=5000)
-            text = await response_area.inner_text()
-            logger.info(f"WebChat doubao: extracted {len(text)} chars via RESPONSE_SELECTOR")
-        except Exception:
-            # 回退：TreeWalker 提取可见文本（排除 UI chrome）。
-            # 取整个 message-list（而非 document.body）以避开侧栏历史会话文本；
-            # 对话隔离由 _start_new_chat（点豆包logo开新会话 + 校验）保证，
-            # 新会话里 message-list 只含本次问答，不会串入上一题。
-            logger.info("WebChat doubao: RESPONSE_SELECTOR failed, falling back to TreeWalker")
-            text = await page.evaluate("""() => {
+            res = await page.evaluate(extract_assistant_js, question)
+            text = (res.get("text") or "").strip()
+            logger.info(f"WebChat doubao: extracted {len(text)} chars via assistant v_list_row "
+                        f"(rows={res.get('rows')}, user_idx={res.get('user_idx')})")
+        except Exception as e:
+            logger.warning(f"WebChat doubao: 定位 assistant 气泡失败: {e}")
+
+        # 1b) 兜底：assistant 气泡定位失败或抓到首页噪声时，回退 TreeWalker（限 message-list）
+        HOMEPAGE_MARKERS = ["新对话", "有什么我能帮你的吗", "资讯：", "AI 生成可能有误"]
+        is_homepage_noise = any(m in text[:200] for m in HOMEPAGE_MARKERS) if text else False
+        if (not text) or is_homepage_noise:
+            logger.info(f"WebChat doubao: assistant 气泡无文本/抓到首页噪声(noise={is_homepage_noise})，回退 TreeWalker")
+            text = await page.evaluate("""(question) => {
                 const exclude = 'input, textarea, button, [role="navigation"], [role="menubar"], header, footer, script, style, noscript, link, meta';
                 const ml = document.querySelector('[class*="message-list"]') || document.body;
+                const rows = Array.from(ml.querySelectorAll('[class*="v_list_row"]'));
+                const q = (question || '').trim();
+                let userIdx = -1;
+                if (q) {
+                  for (let i = 0; i < rows.length; i++) {
+                    const t = (rows[i].innerText || '').trim();
+                    if (t.startsWith(q) || t.includes(q)) { userIdx = i; break; }
+                  }
+                }
+                // TreeWalker 限定在 user 行之后的 assistant 区域
+                let root = ml;
+                if (userIdx >= 0 && rows[userIdx + 1]) root = rows[userIdx + 1];
+                else if (rows.length) root = rows[rows.length - 1];
                 const walker = document.createTreeWalker(
-                    ml,
+                    root,
                     NodeFilter.SHOW_TEXT,
                     {
                         acceptNode: (node) => {
@@ -1536,9 +1653,9 @@ class DoubaoWebChatClient(WebChatClientBase):
                 let n;
                 while (n = walker.nextNode()) texts.push(n.textContent.trim());
                 return texts.join('\\n').trim();
-            }""")
+            }""", question)
             if text:
-                logger.info(f"WebChat doubao: extracted {len(text)} chars via TreeWalker fallback")
+                logger.info(f"WebChat doubao: extracted {len(text)} chars via TreeWalker fallback (assistant-scoped)")
 
         # 2) 锚定「搜索/参考」资料卡片容器取引用链接
         #    卡片标题元素形如 <div ...>搜索N个关键词，参考X篇资料</div>，

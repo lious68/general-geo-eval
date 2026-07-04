@@ -138,7 +138,12 @@
 
       <!-- 各渠道(模型)分值详情 -->
       <div class="channel-section" style="margin-top:20px">
-        <h3 class="section-title">各渠道分值详情</h3>
+        <h3 class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>各渠道分值详情</span>
+          <el-button type="warning" plain size="small" :loading="qualityLoading" @click="openQualityCheck">
+            <el-icon><CircleCheck /></el-icon> 抓取质量检查
+          </el-button>
+        </h3>
         <el-card>
           <el-table :data="channelDetails" stripe border style="width:100%">
             <el-table-column label="渠道" width="120" fixed>
@@ -387,6 +392,81 @@
           </el-table>
         </template>
       </el-drawer>
+
+      <!-- 抓取质量检查抽屉 -->
+      <el-drawer v-model="qualityDrawerVisible" title="抓取质量检查" size="60%" direction="rtl" :destroy-on-close="true">
+        <div v-if="qualityLoading" style="text-align:center;padding:40px">
+          <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+          <p style="color:#999;margin-top:8px">正在检查抓取质量...</p>
+        </div>
+        <template v-else-if="qualityData">
+          <!-- 汇总 -->
+          <div class="quality-summary" :class="qualityData.bad_count > 0 ? 'has-bad' : 'all-ok'">
+            <template v-if="qualityData.bad_count > 0">
+              <el-icon><WarningFilled /></el-icon>
+              <span>发现 <strong>{{ qualityData.bad_count }}</strong> 个坏题（共 {{ qualityData.total }} 题）</span>
+              <span class="quality-type-breakdown">
+                {{ qualityTypeBreakdown }}
+              </span>
+            </template>
+            <template v-else>
+              <el-icon><CircleCheck /></el-icon>
+              <span>抓取质量检查通过，无坏题（共 {{ qualityData.total }} 题）</span>
+            </template>
+          </div>
+
+          <!-- 按模型统计 -->
+          <el-table :data="qualityModelRows" stripe size="small" style="width:100%;margin-bottom:16px">
+            <el-table-column prop="model" label="模型" width="100" />
+            <el-table-column prop="total" label="总数" width="70" align="center" />
+            <el-table-column prop="bad" label="坏题" width="70" align="center">
+              <template #default="{ row }">
+                <strong :class="row.bad > 0 ? 'q-bad-count' : 'q-ok-count'">{{ row.bad }}</strong>
+              </template>
+            </el-table-column>
+            <el-table-column label="类型分布">
+              <template #default="{ row }">
+                <el-tag v-for="(cnt, tp) in row.types" :key="tp" :type="qualityTagType(tp)" size="small" effect="plain" style="margin-right:4px">
+                  {{ qualityTypeCn(tp) }} {{ cnt }}
+                </el-tag>
+                <span v-if="!row.types || Object.keys(row.types).length === 0" style="color:#999">—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <!-- 坏题清单 -->
+          <template v-if="qualityData.bad && qualityData.bad.length">
+            <div class="quality-bad-title">坏题清单</div>
+            <el-table :data="qualityData.bad" stripe size="small" style="width:100%" :default-sort="{ prop: 'model', order: 'ascending' }">
+              <el-table-column prop="model" label="模型" width="90" sortable />
+              <el-table-column prop="qid" label="题号" width="70" sortable />
+              <el-table-column label="类型" width="130">
+                <template #default="{ row }">
+                  <el-tag :type="qualityTagType(row.type)" size="small">{{ qualityTypeCn(row.type) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="len" label="长度" width="70" sortable />
+              <el-table-column label="题目" min-width="200" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.question_text }}</template>
+              </el-table-column>
+              <el-table-column label="回答预览" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }"><span style="color:#999">{{ row.head }}</span></template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" fixed="right">
+                <template #default="{ row }">
+                  <el-button type="primary" link size="small" @click="qualityViewDetail(row.model)">
+                    <el-icon><View /></el-icon> 明细
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </template>
+          <div v-else style="text-align:center;padding:30px;color:#67c23a">
+            <el-icon :size="40"><CircleCheck /></el-icon>
+            <p style="margin-top:8px">所有题目抓取正常</p>
+          </div>
+        </template>
+      </el-drawer>
     </template>
   </div>
 </template>
@@ -475,6 +555,77 @@ const drilldownData = ref(null)
 const drilldownModelKey = ref('')
 const drilldownModelName = ref('')
 const drilldownLoading = ref(false)
+
+// 抓取质量检查抽屉
+const qualityDrawerVisible = ref(false)
+const qualityData = ref(null)
+const qualityLoading = ref(false)
+
+const qualityModelRows = computed(() => {
+  if (!qualityData.value || !qualityData.value.by_model) return []
+  return Object.entries(qualityData.value.by_model).map(([model, info]) => ({
+    model, total: info.total, bad: info.bad, types: info.types || {},
+  }))
+})
+
+const qualityTypeBreakdown = computed(() => {
+  if (!qualityData.value || !qualityData.value.by_model) return ''
+  const agg = {}
+  for (const info of Object.values(qualityData.value.by_model)) {
+    for (const [tp, cnt] of Object.entries(info.types || {})) {
+      agg[tp] = (agg[tp] || 0) + cnt
+    }
+  }
+  return Object.entries(agg).map(([tp, cnt]) => `${qualityTypeCn(tp)} ${cnt}`).join(' / ')
+})
+
+function qualityTagType(label) {
+  const map = {
+    ERROR: 'danger', EMPTY_ECHO: 'danger', TOO_SHORT: 'danger',
+    CROSS_QUESTION: 'warning', NOISE: 'warning',
+    SEARCH_PANEL_TRUNC: 'info',
+  }
+  return map[label] || ''
+}
+
+function qualityTypeCn(label) {
+  const map = {
+    ERROR: '错误/空', EMPTY_ECHO: '空回声', CROSS_QUESTION: '串题',
+    NOISE: '首页噪声', SEARCH_PANEL_TRUNC: '搜索面板截断', TOO_SHORT: '过短',
+  }
+  return map[label] || label
+}
+
+async function openQualityCheck() {
+  // 复用当前定位: task 模式用 selectedTaskId/query, run 模式用 latestRun.id
+  const taskId = route.query.task_id || selectedTaskId.value
+  const runId = latestRun.value?.id
+  if (!taskId && !runId) {
+    ElMessage.warning('请先选择任务或打开一次评测')
+    return
+  }
+  qualityDrawerVisible.value = true
+  qualityData.value = null
+  qualityLoading.value = true
+  try {
+    const url = taskId
+      ? `/results/0/quality-check?task_id=${encodeURIComponent(taskId)}`
+      : `/results/${runId}/quality-check`
+    const res = await apiFetch(url)
+    qualityData.value = res.data || null
+  } catch (e) {
+    console.error('Quality check error:', e)
+    ElMessage.error('质量检查失败: ' + (e.message || e))
+  } finally {
+    qualityLoading.value = false
+  }
+}
+
+function qualityViewDetail(modelKey) {
+  // 关掉质量抽屉, 打开该模型的问题明细抽屉
+  qualityDrawerVisible.value = false
+  openDrilldown(modelKey)
+}
 const filterMetric = ref('all')
 const filterCondition = ref('all')
 const expandedAnswers = ref({})
@@ -947,6 +1098,16 @@ watch(() => [route.query.task_id, route.query.run_id], async () => {
 .val-miss { color: #c0c4cc; }
 .val-na { color: #b0b0b0; font-style: italic; }
 .val-neutral { color: #e6a23c; }
+
+/* 抓取质量检查 */
+.quality-summary { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.quality-summary.has-bad { background: #fef0f0; border: 1px solid #fbc4c4; color: #c45656; }
+.quality-summary.all-ok { background: #f0f9eb; border: 1px solid #c2e7b0; color: #67c23a; }
+.quality-summary .el-icon { font-size: 18px; }
+.quality-type-breakdown { color: #909399; font-size: 13px; margin-left: 8px; }
+.quality-bad-title { font-size: 14px; font-weight: 600; color: #333; margin: 8px 0 8px; }
+.q-bad-count { color: #f56c6c; }
+.q-ok-count { color: #67c23a; }
 .expand-content { padding: 8px 16px; background: #fafafa; }
 .expand-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .expand-label { font-size: 12px; color: #909399; margin-bottom: 2px; }

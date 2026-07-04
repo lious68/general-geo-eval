@@ -651,3 +651,79 @@ async def compare_runs(run_id_1: str = Query(...), run_id_2: str = Query(...)):
     scores1 = await db.get_scores(run_id_1)
     scores2 = await db.get_scores(run_id_2)
     return {"success": True, "data": {"run_1": scores1, "run_2": scores2}}
+
+
+@router.get("/{run_id}/quality-check")
+async def get_quality_check(run_id: str, model_key: Optional[str] = None,
+                            task_id: Optional[str] = None):
+    """抓取质量检查：逐题判定空回声/串题/首页噪声/搜索面板截断/过短/错误。
+
+    只读, 不改 DB/评分。复用 core/webchat_quality.classify（与 CLI 脚本
+    check_webchat_results.py 同源, 避免双份漂移）。
+    task_id 模式: 按大任务聚合该模型(或全部模型)的 analysis_results,
+        run_id 传 "0" 占位、不做 run 存在性校验（与 question-drilldown 同形）。
+    model_key 不传: 查该 task/run 全部模型。
+    """
+    from webchat_quality import classify
+
+    if task_id:
+        all_results = await db.get_task_results(task_id, model_key)
+    else:
+        run = await db.get_run(run_id)
+        if not run:
+            raise HTTPException(404, "评测不存在")
+        all_results = await db.get_results(run_id, model_key)
+
+    if not all_results:
+        return {"success": True, "data": {"total": 0, "bad_count": 0, "by_model": {}, "bad": []}}
+
+    # 关联 questions 表获取全题题干（串题判定需全题比对）
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = (row["question"] or "").strip()
+    finally:
+        await db_conn.close()
+
+    # 按模型分组
+    by_model_dict = {}
+    for r in all_results:
+        by_model_dict.setdefault(r.get("model_key", ""), []).append(r)
+
+    by_model = {}
+    bad_list = []
+    for mk, results in by_model_dict.items():
+        total = len(results)
+        bad = 0
+        types = {}
+        for r in sorted(results, key=lambda x: x.get("question_id", "")):
+            qid = r.get("question_id", "")
+            raw = r.get("raw_content", "") or ""
+            err = r.get("error_message", "") or ""
+            qtext = question_map.get(qid, "")
+            label, detail = classify(qid, raw, err, qtext, question_map, mk)
+            if label != "OK":
+                bad += 1
+                types[label] = types.get(label, 0) + 1
+                bad_list.append({
+                    "model": mk,
+                    "qid": qid,
+                    "question_text": qtext,
+                    "type": label,
+                    "len": len(raw.strip()),
+                    "head": raw[:60].replace("\n", " "),
+                    "detail": detail,
+                })
+        by_model[mk] = {"total": total, "bad": bad, "types": types}
+
+    return {
+        "success": True,
+        "data": {
+            "total": sum(v["total"] for v in by_model.values()),
+            "bad_count": len(bad_list),
+            "by_model": by_model,
+            "bad": bad_list,
+        },
+    }

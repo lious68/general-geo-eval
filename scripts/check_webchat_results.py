@@ -33,10 +33,9 @@ if sys.platform == "win32" and sys.stdout is not None:
     except (AttributeError, ValueError, OSError):
         pass
 
-HOMEPAGE_MARKERS = ["新对话", "有什么我能帮你的吗", "资讯：", "AI 生成可能有误", "请核实"]
-UCLOUD_MARKERS = ["UCloud", "优刻得", "U云", "UCLOUD"]
-# 搜索元数据标记(各模型搜索题正文前会出现, 用于 TOO_SHORT 排除搜索题)
-SEARCH_META_MARKERS = ["搜索网页", "个结果", "搜索关键词", "参考资料", "参考", "篇资料"]
+# 判定逻辑与后端接口共用同一份, 避免双份漂移
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "core"))
+from webchat_quality import classify, type_label_cn  # noqa: E402
 
 
 def load_run(path):
@@ -48,55 +47,6 @@ def load_run(path):
     qmap = {q.get("id", ""): (q.get("question", "") or "").strip() for q in questions}
     ar = data.get("analysis_results", {})
     return meta, qmap, ar
-
-
-def classify(qid, raw, error, qtext, all_qtext, model_key):
-    """判定单题质量。返回 (label, detail) 或 ('OK', None)。
-
-    判定顺序: ERROR → EMPTY_ECHO → CROSS_QUESTION → NOISE →
-              SEARCH_PANEL_TRUNC → TOO_SHORT, 命中即停(一题一主问题)。
-    """
-    raw = (raw or "").strip()
-    err = (error or "").strip()
-    n = len(raw)
-    q = (qtext or "").strip()
-
-    # 1 ERROR: 有错误 或 空
-    if err:
-        return "ERROR", err[:80]
-    if n == 0:
-        return "ERROR", "raw_content 为空"
-
-    # 2 EMPTY_ECHO 空回声: raw ≈ 题干本身
-    if q and n <= len(q) + 8 and (raw == q or raw.startswith(q)):
-        return "EMPTY_ECHO", f"raw≈题干({n}字)"
-
-    # 3 CROSS_QUESTION 串题: 首行 == 他题题干
-    first_line = raw.split("\n", 1)[0].strip()[:40]
-    for other, oq in all_qtext.items():
-        if other == qid or len(oq) < 8:
-            continue
-        if first_line.startswith(oq[:12]):
-            return "CROSS_QUESTION", f"首行={other}题干"
-
-    # 4 NOISE 首页噪声: 前200字含首页标记且<400字
-    if n < 400 and any(m in raw[:200] for m in HOMEPAGE_MARKERS):
-        return "NOISE", "含首页推荐流标记"
-
-    # 5 SEARCH_PANEL_TRUNC: kimi 专属, 搜索面板截断
-    if model_key == "kimi":
-        head60 = raw[:60]
-        if "搜索网页" in head60 and "个结果" in raw[:80] and n < 150:
-            return "SEARCH_PANEL_TRUNC", f"只抓到搜索面板({n}字)"
-
-    # 6 TOO_SHORT 过短: <120字且不含UCloud词+不含搜索元数据
-    if n < 120:
-        has_ucloud = any(m in raw for m in UCLOUD_MARKERS)
-        has_meta = any(m in raw for m in SEARCH_META_MARKERS)
-        if not has_ucloud and not has_meta:
-            return "TOO_SHORT", f"过短且无实质内容({n}字)"
-
-    return "OK", None
 
 
 def check_run(path, verbose=False, report_path=None):

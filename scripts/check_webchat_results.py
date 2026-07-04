@@ -177,7 +177,9 @@ def main():
         sys.exit(2)
 
     bad_count = check_run(run_path, verbose=args.verbose, report_path=args.report)
-    sys.exit(1 if bad_count > 0 else 0)
+    # 注意: sys.exit(非零) 会被 Python 以 code 1 上报, 掩盖真实退出码。
+    # 用 0(无坏题)/1(有坏题) 两种, 便于脚本串联。
+    raise SystemExit(1 if bad_count > 0 else 0)
 
 
 def _pick_run_interactive(latest: bool) -> str:

@@ -48,12 +48,20 @@ def classify(qid, raw, error, qtext, all_qtext, model_key):
         return "EMPTY_ECHO", f"raw≈题干({n}字)"
 
     # 3 CROSS_QUESTION 串题: 首行 == 他题题干
+    # 真串题特征(0630 q006): 首行就是另一题的完整题干(短、常带问号)。
+    # 误报排除:
+    #   a) 首行以【本题】题干开头 → 是回答回显题干(豆包正常格式"题干+搜索元数据+正文"),
+    #      不是串题。
+    #   b) 首行虽以他题题干前缀开头, 但首行比他题题干长很多 → 是正常展开的长答案
+    #      (如 deepseek q037 首行"API中转站…的核心区别在于…"撞了题库里另一题前缀),
+    #      非串题。只有首行≈他题题干本身(≤他题干+4字)才算串题。
     first_line = raw.split("\n", 1)[0].strip()[:40]
-    for other, oq in all_qtext.items():
-        if other == qid or len(oq) < 8:
-            continue
-        if first_line.startswith(oq[:12]):
-            return "CROSS_QUESTION", f"首行={other}题干"
+    if q and not first_line.startswith(q):  # 排除 a) 本题题干回显
+        for other, oq in all_qtext.items():
+            if other == qid or len(oq) < 8:
+                continue
+            if first_line.startswith(oq[:12]) and len(first_line) <= len(oq) + 4:
+                return "CROSS_QUESTION", f"首行={other}题干"
 
     # 4 NOISE 首页噪声: 前200字含首页标记且<400字
     if n < 400 and any(m in raw[:200] for m in HOMEPAGE_MARKERS):

@@ -561,6 +561,31 @@ async def run_local_eval(
             os.remove(partial_path)
     except OSError:
         pass
+
+    # [质量检查] 跑完即自检: 检查每题是否抓到内容/抓全/串题/空回声/搜索面板截断。
+    # 独立子进程跑 check_webchat_results.py, 失败不影响主流程(结果已存盘)。
+    # 坏题会高亮打印 + 落 output/check_{run_id}.json, 便于导入前发现抓取问题。
+    try:
+        import subprocess
+        checker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_webchat_results.py")
+        if os.path.isfile(checker):
+            print("\n[质量检查] 检查抓取质量(空回声/串题/首页噪声/搜索面板截断/过短)...")
+            r = subprocess.run(
+                [sys.executable, checker, output_path],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            # 打印检查器输出(stdout 已是格式化表格)
+            if r.stdout:
+                print(r.stdout, end="")
+            if r.returncode == 1:
+                print("  ⚠️ 发现坏题, 详见上方报告 + output/check_*.json")
+                print("  💡 可对坏题建重批次重跑(POST /api/tasks/{task_id}/batches 带 per_model_question_ids)")
+            elif r.returncode == 0:
+                print("  ✅ 抓取质量检查通过, 无坏题")
+            # returncode==2: 文件不存在等(不会发生, output_path 刚写)
+    except Exception as e:
+        print(f"  (质量检查跳过: {e})")
+
     print("完成。")
 
 

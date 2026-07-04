@@ -465,7 +465,12 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
         denom = 1
         coverage_num = 1 if r.get("ucloud_mentioned") and not has_error else 0
         citation_num = 1 if db.has_effective_citation(r) and not has_error else 0
-        recommend_num = 1 if r.get("ucloud_recommended") and not has_error else 0
+        # TOP3 推荐率分子必须与顶层 metrics.py 一致：rank<=3 才算进 top3，
+        # 而非 "回答里出现了推荐词"(ucloud_recommended 布尔)——否则排名#4 的题
+        # 会因回答含"强烈推荐"而在抽屉显示 1/1，与顶层聚合(0.4839=15/31)对不上。
+        # （0630 doubao q011: rank=4 + ucloud_recommended=1，正是此类边角。）
+        rank = r.get("ucloud_rank")
+        recommend_num = 1 if (rank is not None and rank <= 3) and not has_error else 0
         strength = r.get("recommendation_strength", "none") or "none"
 
         # 引导型/非自然问题：提及率和TOP3推荐率显示"-"

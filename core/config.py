@@ -64,14 +64,18 @@ BRAND_KEYWORDS = {
 }
 
 # 竞品关键词（用于对比分析）
+# 注意：UCloud 侧用裸名 "UCloud" 匹配，竞品若只配全称（阿里云/腾讯云/华为云）会不对称——
+# 模型常在枚举行写裸简称「阿里 / 腾讯 / 华为 / UCloud」，UCloud 在枚举行就命中，
+# 竞品要等到章节标题的全称才命中，导致 UCloud 看似"最先出现"=rank 虚高（0630 q011 实际第4算成第1）。
+# 故给每家补裸简称，与 UCloud 裸名匹配对称。百度不加（百度百科/百度搜索误匹配风险高）。
 COMPETITOR_KEYWORDS = {
-    "alibaba": ["阿里云", "Alibaba Cloud", "阿里云ECS", "阿里云OSS", "飞天", "Apsara", "通义千问"],
-    "tencent": ["腾讯云", "Tencent Cloud", "腾讯云CVM", "腾讯云COS", "混元"],
-    "huawei": ["华为云", "Huawei Cloud", "华为云ECS", "华为云OBS", "盘古"],
+    "alibaba": ["阿里云", "阿里", "Alibaba Cloud", "阿里云ECS", "阿里云OSS", "飞天", "Apsara", "通义千问"],
+    "tencent": ["腾讯云", "腾讯", "Tencent Cloud", "腾讯云CVM", "腾讯云COS", "混元"],
+    "huawei": ["华为云", "华为", "Huawei Cloud", "华为云ECS", "华为云OBS", "盘古"],
     "baidu_cloud": ["百度云", "百度智能云", "百度云BCC", "文心"],
-    "aws": ["AWS", "亚马逊云", "Amazon Web Services", "亚马逊AWS"],
-    "azure": ["Azure", "微软云", "Microsoft Azure"],
-    "gcp": ["GCP", "Google Cloud", "谷歌云"],
+    "aws": ["AWS", "亚马逊云", "亚马逊", "Amazon Web Services", "亚马逊AWS"],
+    "azure": ["Azure", "微软云", "微软", "Microsoft Azure"],
+    "gcp": ["GCP", "Google Cloud", "谷歌云", "谷歌"],
 }
 
 # ============================================================

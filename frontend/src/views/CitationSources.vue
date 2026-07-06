@@ -118,8 +118,12 @@
             <el-table-column label="示例链接" min-width="320">
               <template #default="{ row }">
                 <div v-for="url in row.sample_urls.slice(0, 3)" :key="url" class="sample-url">
-                  <el-tag v-if="row.sample_url_uc && row.sample_url_uc[url] === true" size="small" type="success" effect="dark" style="margin-right:4px">出现uc</el-tag>
-                  <el-tag v-else-if="!row.sample_url_uc || row.sample_url_uc[url] === null || row.sample_url_uc[url] === undefined" size="small" type="info" effect="plain" style="margin-right:4px">未检测</el-tag>
+                  <el-tooltip v-if="row.sample_url_uc && row.sample_url_uc[url] === true" content="该链接文章正文出现 UCloud/优刻得关键词" placement="top">
+                    <el-tag size="small" type="success" effect="dark" style="margin-right:4px">出现uc</el-tag>
+                  </el-tooltip>
+                  <el-tooltip v-else-if="!row.sample_url_uc || row.sample_url_uc[url] === null || row.sample_url_uc[url] === undefined" content="抓取该网页失败（反爬/超时/非HTML），未能判定文章是否含 UCloud" placement="top">
+                    <el-tag size="small" type="info" effect="plain" style="margin-right:4px">未检测</el-tag>
+                  </el-tooltip>
                   <a :href="url" target="_blank">{{ url }}</a>
                 </div>
                 <span v-if="!row.sample_urls.length" style="color:#999">—</span>
@@ -152,8 +156,12 @@
                     <template #default="{ row }">
                       <div v-for="u in row.urls" :key="u.content" class="sample-url">
                         <el-tag v-if="u.is_ucloud" size="small" type="success" style="margin-right:4px">UCloud</el-tag>
-                        <el-tag v-if="u.mentions_uc === true" size="small" type="success" effect="dark" style="margin-right:4px">出现uc</el-tag>
-                        <el-tag v-else-if="u.mentions_uc === null || u.mentions_uc === undefined" size="small" type="info" effect="plain" style="margin-right:4px">未检测</el-tag>
+                        <el-tooltip v-if="u.mentions_uc === true" content="该链接文章正文出现 UCloud/优刻得关键词" placement="top">
+                          <el-tag size="small" type="success" effect="dark" style="margin-right:4px">出现uc</el-tag>
+                        </el-tooltip>
+                        <el-tooltip v-else-if="u.mentions_uc === null || u.mentions_uc === undefined" content="抓取该网页失败（反爬/超时/非HTML），未能判定文章是否含 UCloud" placement="top">
+                          <el-tag size="small" type="info" effect="plain" style="margin-right:4px">未检测</el-tag>
+                        </el-tooltip>
                         <a :href="u.content" target="_blank">{{ u.content }}</a>
                       </div>
                     </template>

@@ -349,8 +349,12 @@
                     <div class="expand-cites-label">📎 引用来源（{{ row.cited_urls.length }}）：</div>
                     <div v-for="(u, i) in row.cited_urls" :key="i" class="expand-cite-row">
                       <el-tag v-if="u.is_ucloud" size="small" type="success" effect="dark">UCloud</el-tag>
-                      <el-tag v-if="u.mentions_uc === true" size="small" type="success" effect="dark">出现uc</el-tag>
-                      <el-tag v-else-if="u.mentions_uc === null || u.mentions_uc === undefined" size="small" type="info" effect="plain">未检测</el-tag>
+                      <el-tooltip v-if="u.mentions_uc === true" content="该链接文章正文出现 UCloud/优刻得关键词" placement="top">
+                        <el-tag size="small" type="success" effect="dark">出现uc</el-tag>
+                      </el-tooltip>
+                      <el-tooltip v-else-if="u.mentions_uc === null || u.mentions_uc === undefined" content="抓取该网页失败（反爬/超时/非HTML），未能判定文章是否含 UCloud" placement="top">
+                        <el-tag size="small" type="info" effect="plain">未检测</el-tag>
+                      </el-tooltip>
                       <el-tag v-else-if="u.source_channel" size="small" type="info" effect="plain">{{ u.source_channel }}</el-tag>
                       <a :href="u.content" target="_blank" rel="noopener" class="expand-cite-link">{{ u.content }}</a>
                     </div>

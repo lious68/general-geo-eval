@@ -56,12 +56,15 @@ def _classify_url_type(url: str) -> str:
         return "AI生成的引用"
 
 
-def _extract_cited_urls(r: dict) -> list:
+def _extract_cited_urls(r: dict, cache_map: dict = None) -> list:
     """从一条 analysis_result 解析出供前端渲染的引用链接清单。
 
     all_cited_urls 在库里是 JSON 字符串（或已解析数组），取其中 citation_type=url
-    的项，按 content(URL) 去重，返回 [{content, is_ucloud, source_channel}]。
+    的项，按 content(URL) 去重，返回 [{content, is_ucloud, source_channel, mentions_uc}]。
     供前端结果展示区把引用渲染成可点链接，而不只是 raw_content 纯文本。
+
+    mentions_uc = 该 URL 网页正文是否出现 UCloud/优刻得（来自 url_uc_cache 缓存）：
+      True/False/None(未检测)。cache_map 为预取的 {url: mentions_uc}，避免逐条查库。
     """
     urls_raw = r.get("all_cited_urls", "[]")
     if isinstance(urls_raw, str):
@@ -86,10 +89,15 @@ def _extract_cited_urls(r: dict) -> list:
         if c in seen:
             continue
         seen.add(c)
+        # mentions_uc：优先用行内已注入的，否则查 cache_map，否则 None（前端显示"未检测"）
+        mu = u.get("mentions_uc")
+        if mu is None and cache_map is not None:
+            mu = cache_map.get(c)
         out.append({
             "content": c,
             "is_ucloud": bool(u.get("is_ucloud")),
             "source_channel": u.get("source_channel") or _resolve_domain_label(c),
+            "mentions_uc": mu,  # True/False/None
         })
     return out
 
@@ -304,6 +312,23 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None,
         await db_conn.close()
 
     by_model = {}
+    # 预取这批结果所有引用 URL 的 mentions_uc 缓存（一次查库）
+    _chan_all_urls = set()
+    for r in all_results:
+        for field in ("all_cited_urls", "citations"):
+            v = r.get(field)
+            try:
+                lst = json.loads(v) if isinstance(v, str) else v
+            except (ValueError, TypeError):
+                continue
+            if isinstance(lst, list):
+                for item in lst:
+                    if isinstance(item, dict):
+                        _u = item.get("content") or item.get("url") or ""
+                        if _u and str(_u).startswith("http"):
+                            _chan_all_urls.add(_u)
+    _uc_chan_map = await db.get_url_uc_cached_map(list(_chan_all_urls)) if _chan_all_urls else {}
+
     for r in all_results:
         has_error = r.get("error_message") and r["error_message"] != ""
         if has_error:
@@ -356,6 +381,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None,
                 "question_category": q_info.get("category", ""),
                 "url": url_content,
                 "url_type": _classify_url_type(url_content),
+                "mentions_uc": _uc_chan_map.get(url_content),
             })
 
         # 也统计 citations 中 UCloud 的引用
@@ -392,6 +418,7 @@ async def get_citation_channel_clustering(run_id: str, model_key: str = None,
                 "question_category": q_info.get("category", ""),
                 "url": url_content,
                 "url_type": _classify_url_type(url_content),
+                "mentions_uc": _uc_chan_map.get(url_content),
             })
 
     # 转换 channels dict 为列表并排序，同时提取 sample_urls
@@ -439,6 +466,23 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
         return {"success": True, "data": {"model_name": model_key, "total_questions": 0, "questions": []}}
 
     model_name = all_results[0].get("model_name", model_key)
+
+    # 预取这批结果所有引用 URL 的 mentions_uc 缓存（一次查库，避免逐条查）
+    _all_urls = []
+    for r in all_results:
+        for field in ("all_cited_urls", "citations"):
+            v = r.get(field)
+            try:
+                lst = json.loads(v) if isinstance(v, str) else v
+            except (ValueError, TypeError):
+                continue
+            if isinstance(lst, list):
+                for item in lst:
+                    if isinstance(item, dict):
+                        u = item.get("content") or item.get("url") or ""
+                        if u and str(u).startswith("http"):
+                            _all_urls.append(u)
+    _uc_cache_map = await db.get_url_uc_cached_map(_all_urls) if _all_urls else {}
 
     # 关联 questions 表获取题目文本、品类、类型
     db_conn = await db.get_db()
@@ -517,7 +561,7 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
             "has_citation": bool(db.has_effective_citation(r)),
             "response_summary": summary,
             "response_content": response_content,
-            "cited_urls": _extract_cited_urls(r),
+            "cited_urls": _extract_cited_urls(r, cache_map=_uc_cache_map),
             "has_error": has_error,
             "error_message": r.get("error_message") if has_error else None,
         })
@@ -557,6 +601,23 @@ async def get_citation_drilldown(run_id: str, source_channel: str = Query(...),
         await db_conn.close()
 
     by_model = {}
+    # 预取这批结果所有引用 URL 的 mentions_uc 缓存（一次查库）
+    _chan_all_urls = set()
+    for r in all_results:
+        for field in ("all_cited_urls", "citations"):
+            v = r.get(field)
+            try:
+                lst = json.loads(v) if isinstance(v, str) else v
+            except (ValueError, TypeError):
+                continue
+            if isinstance(lst, list):
+                for item in lst:
+                    if isinstance(item, dict):
+                        _u = item.get("content") or item.get("url") or ""
+                        if _u and str(_u).startswith("http"):
+                            _chan_all_urls.add(_u)
+    _uc_chan_map = await db.get_url_uc_cached_map(list(_chan_all_urls)) if _chan_all_urls else {}
+
     for r in all_results:
         has_error = r.get("error_message") and r["error_message"] != ""
         if has_error:
@@ -591,6 +652,7 @@ async def get_citation_drilldown(run_id: str, source_channel: str = Query(...),
                     "content": url_content,
                     "is_ucloud": url_info.get("is_ucloud", False),
                     "url_type": _classify_url_type(url_content),
+                    "mentions_uc": _uc_chan_map.get(url_content),
                 })
 
         # 从 citations 中查找
@@ -617,6 +679,7 @@ async def get_citation_drilldown(run_id: str, source_channel: str = Query(...),
                         "content": url_content,
                         "is_ucloud": cit.get("is_ucloud", False),
                         "url_type": _classify_url_type(url_content),
+                        "mentions_uc": _uc_chan_map.get(url_content),
                     })
 
         if not matching_urls:
@@ -648,6 +711,28 @@ async def backfill_citations(run_id: str):
 
     count = await db.backfill_citations(run_id)
     return {"success": True, "data": {"backfilled": count}}
+
+
+@router.post("/{run_id}/backfill-url-uc")
+async def backfill_url_uc(run_id: str, task_id: Optional[str] = None,
+                          concurrency: int = 8):
+    """对指定 run/task 范围内的引用 URL 抓取并回填「出现 UCloud」缓存。
+
+    抓取每个 URL 网页正文是否含 UCloud/优刻得，结果存 url_uc_cache 表（跨 task 复用）。
+    官方域名短路判 True；抓取失败标 NULL（前端显示"未检测"）。
+    task_id 模式：run_id 传 "0" 占位。
+    """
+    if task_id:
+        scope, rid, tid = "task", None, task_id
+    else:
+        run = await db.get_run(run_id)
+        if not run:
+            raise HTTPException(404, "评测不存在")
+        scope, rid, tid = "run", run_id, None
+
+    stats = await db.backfill_url_uc(scope=scope, run_id=rid, task_id=tid,
+                                     concurrency=concurrency)
+    return {"success": True, "data": stats}
 
 
 @router.get("/compare")

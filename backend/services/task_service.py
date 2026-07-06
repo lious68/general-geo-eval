@@ -235,6 +235,15 @@ async def import_batch_results(task_id: str, data: Dict, batch_id: Optional[str]
     # 重算 task 评分（覆盖）
     await recalculate_task_scores(task_id)
 
+    # 自动触发：对本次导入涉及的新引用 URL 抓取回填「出现 UCloud」缓存。
+    # 抓取耗时长（每 URL 抓网页），放后台 fire-and-forget，不阻塞导入返回；
+    # 失败不影响导入结果，下次手动 backfill 也能补。
+    try:
+        import asyncio as _asyncio
+        _asyncio.create_task(_backfill_url_uc_background(task_id))
+    except Exception:
+        pass  # 后台触发失败不影响导入
+
     # 记一条导入审计日志（数据已落库，记成功痕迹）
     try:
         await db.add_batch_import_log(task_id, batch_id, run_id, inserted, file_name, file_size)
@@ -242,6 +251,23 @@ async def import_batch_results(task_id: str, data: Dict, batch_id: Optional[str]
         pass  # 审计日志写失败不影响导入结果
 
     return {"task_id": task_id, "batch_id": batch_id, "results_inserted": inserted}
+
+
+async def _backfill_url_uc_background(task_id: str):
+    """导入后后台抓取该 task 范围内未缓存的引用 URL，回填 mentions_uc。
+
+    fire-and-forget：异常吞掉，只写日志。一劳永逸——新跑的 URL 自动补缓存。
+    """
+    try:
+        await db.backfill_url_uc(scope="task", task_id=task_id, concurrency=6)
+    except Exception as e:
+        # 不抛、不影响主流程；记录即可
+        try:
+            import logging as _log
+            _log.getLogger("geo-eval").warning(
+                f"backfill_url_uc(task={task_id}) 后台抓取失败: {e}")
+        except Exception:
+            pass
 
 
 async def get_batch_results(task_id: str, batch_id: str) -> List[Dict]:

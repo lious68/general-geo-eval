@@ -349,6 +349,8 @@
                     <div class="expand-cites-label">📎 引用来源（{{ row.cited_urls.length }}）：</div>
                     <div v-for="(u, i) in row.cited_urls" :key="i" class="expand-cite-row">
                       <el-tag v-if="u.is_ucloud" size="small" type="success" effect="dark">UCloud</el-tag>
+                      <el-tag v-if="u.mentions_uc === true" size="small" type="success" effect="dark">出现uc</el-tag>
+                      <el-tag v-else-if="u.mentions_uc === null || u.mentions_uc === undefined" size="small" type="info" effect="plain">未检测</el-tag>
                       <el-tag v-else-if="u.source_channel" size="small" type="info" effect="plain">{{ u.source_channel }}</el-tag>
                       <a :href="u.content" target="_blank" rel="noopener" class="expand-cite-link">{{ u.content }}</a>
                     </div>

@@ -483,6 +483,17 @@ async def _migrate_add_columns(db: aiosqlite.Connection):
     await db.execute("CREATE INDEX IF NOT EXISTS idx_scores_brand ON geo_scores(brand_id)")
     await db.commit()
 
+    # url_uc_cache：引用 URL「文章是否出现 UCloud/优刻得」缓存（按 URL 主键，跨 task/run/模型复用）
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS url_uc_cache (
+            url TEXT PRIMARY KEY,
+            mentions_uc INTEGER,       -- 1=出现 0=没出现 NULL=抓取失败/未检测
+            status TEXT,               -- ok / official / fetch_failed / not_cached
+            fetched_at TEXT
+        )"""
+    )
+    await db.commit()
+
 
 async def _ensure_default_brand(db: aiosqlite.Connection):
     """幂等预置 ucloud 品牌 + current_brand_id。已有 brands 行则不覆盖。"""
@@ -1166,7 +1177,188 @@ async def backfill_citations(run_id: str) -> int:
     return count
 
 
-# ============ 三级任务单元（task_units）============
+# ============ 引用 URL「出现 UCloud」缓存 ============
+
+async def get_url_uc_cached(url: str):
+    """读单个 URL 的 mentions_uc 缓存。返回 mentions_uc(可空) 或 None（未缓存）。"""
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT mentions_uc FROM url_uc_cache WHERE url=?", (url,))
+        row = await cur.fetchone()
+        return row["mentions_uc"] if row else None
+    finally:
+        await db.close()
+
+
+async def get_url_uc_cached_map(urls):
+    """批量读缓存，返回 {url: mentions_uc(可空)}。未缓存的 URL 不在返回 dict 里。"""
+    if not urls:
+        return {}
+    uniq = list(dict.fromkeys(urls))
+    db = await get_db()
+    try:
+        # aiosqlite 不支持 IN + 列表参数展开直接传 list，分批
+        out = {}
+        BATCH = 500
+        for i in range(0, len(uniq), BATCH):
+            chunk = uniq[i:i + BATCH]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"SELECT url, mentions_uc FROM url_uc_cache WHERE url IN ({placeholders})",
+                chunk)
+            for row in await cur.fetchall():
+                out[row["url"]] = row["mentions_uc"]
+        return out
+    finally:
+        await db.close()
+
+
+async def upsert_url_uc(url: str, mentions_uc, status: str):
+    """写/更新单条 URL 缓存。"""
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO url_uc_cache (url, mentions_uc, status, fetched_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(url) DO UPDATE SET
+                 mentions_uc=excluded.mentions_uc,
+                 status=excluded.status,
+                 fetched_at=CURRENT_TIMESTAMP""",
+            (url, mentions_uc, status))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def inject_mentions_uc_into_result(row: dict, cache_map: dict = None) -> dict:
+    """把 url_uc_cache 的 mentions_uc 注入一条 analysis_results 行的
+    citations / all_cited_urls JSON 里。
+
+    cache_map 可选：预取的 {url: mentions_uc} 映射，避免逐条查库；
+    为 None 时每个 URL 查一次库。
+    返回修改后的 row（citations / all_cited_urls 字段已是带 mentions_uc 的 JSON 字符串）。
+    """
+    import json as _json
+
+    def _inject(field):
+        v = row.get(field)
+        if not v:
+            return v
+        try:
+            lst = _json.loads(v) if isinstance(v, str) else v
+        except (ValueError, TypeError):
+            return v
+        if not isinstance(lst, list):
+            return v
+        changed = False
+        for item in lst:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("content") or item.get("url") or ""
+            if not url or not str(url).startswith("http"):
+                continue
+            if "mentions_uc" in item and item.get("mentions_uc") is not None:
+                continue  # 已注入过
+            if cache_map is not None:
+                mu = cache_map.get(url)
+            else:
+                mu = await get_url_uc_cached(url)
+            # 缓存里没有(None未缓存)时，前端会显示"未检测"；这里显式写 null
+            item["mentions_uc"] = mu
+            changed = True
+        if changed:
+            return _json.dumps(lst, ensure_ascii=False)
+        return v
+
+    row["citations"] = _inject("citations")
+    row["all_cited_urls"] = _inject("all_cited_urls")
+    return row
+
+
+async def collect_urls_needing_fetch(scope: str = "all", run_id: str = None,
+                                     task_id: str = None) -> list:
+    """收集所有未在 url_uc_cache 里成功判定的引用 URL（去重）。
+
+    scope: 'all' / 'run' / 'task'。
+    已缓存且 status in ('ok','official') 的跳过；fetch_failed 的重试。
+    UCloud 官方域名也包含进来（由抓取层短路判 True 写 official）。
+    """
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+    from url_uc_cache import is_uc_official_url
+
+    db = await get_db()
+    try:
+        if scope == "run":
+            where = "WHERE run_id=?"
+            params = [run_id]
+        elif scope == "task":
+            where = "WHERE task_id=?"
+            params = [task_id]
+        else:
+            where = ""
+            params = []
+        cur = await db.execute(
+            f"SELECT citations, all_cited_urls FROM analysis_results {where}", params)
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    # 收集所有 URL
+    all_urls = set()
+    for row in rows:
+        for field in ("citations", "all_cited_urls"):
+            v = row[field] if field in row.keys() else row[field]
+            try:
+                import json as _json
+                lst = _json.loads(v) if isinstance(v, str) else v
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(lst, list):
+                continue
+            for item in lst:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("content") or item.get("url") or ""
+                if url and str(url).startswith("http"):
+                    all_urls.add(url)
+
+    # 过滤掉已成功缓存的
+    cached = await get_url_uc_cached_map(list(all_urls))
+    need = [u for u in all_urls
+            if u not in cached or cached[u] is None]
+    return need
+
+
+async def backfill_url_uc(scope: str = "all", run_id: str = None,
+                           task_id: str = None, concurrency: int = 8,
+                           on_progress=None) -> dict:
+    """对指定范围内的引用 URL 抓取并回填 mentions_uc 缓存。
+
+    范围内每条 analysis_results 的 citations/all_cited_urls URL 逐个判，
+    结果写 url_uc_cache（跨 task 复用）。不修改 analysis_results 行本身——
+    前端通过 results 端点读时，inject_mentions_uc_into_result 会把缓存值注入 JSON。
+    """
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+    from url_uc_cache import backfill_urls, is_uc_official_url, fetch_and_cache
+
+    need = await collect_urls_needing_fetch(scope=scope, run_id=run_id, task_id=task_id)
+    if not need:
+        return {"total": 0, "fetched": 0, "true": 0, "false": 0,
+                "failed": 0, "note": "无新 URL 需抓取（全部已缓存）"}
+
+    # 先把官方域名短路写 official=True（不抓）
+    official = [u for u in need if is_uc_official_url(u)]
+    for u in official:
+        await upsert_url_uc(u, 1, "official")
+
+    rest = [u for u in need if not is_uc_official_url(u)]
+    stats = await backfill_urls(rest, concurrency=concurrency, on_progress=on_progress)
+    stats["official"] = len(official)
+    stats["total"] = len(need)
+    return stats
 
 # 单元状态机与 schema 见 SCHEMA_SQL 末尾；落库主路径由 core/task_units.SqliteUnitStore
 # （同步 sqlite3）完成，这里提供 server 端异步查询的只读/统计接口。

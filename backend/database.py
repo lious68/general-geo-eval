@@ -1241,6 +1241,24 @@ async def inject_mentions_uc_into_result(row: dict, cache_map: dict = None) -> d
     """
     import json as _json
 
+    # cache_map 为 None 时：先从 row 里收齐所有 URL，一次性预取缓存，再注入。
+    # （闭包内不能 await，故必须先预取成 dict。）
+    if cache_map is None:
+        _need = []
+        for field in ("citations", "all_cited_urls"):
+            v = row.get(field)
+            try:
+                lst = _json.loads(v) if isinstance(v, str) else v
+            except (ValueError, TypeError):
+                continue
+            if isinstance(lst, list):
+                for item in lst:
+                    if isinstance(item, dict):
+                        u = item.get("content") or item.get("url") or ""
+                        if u and str(u).startswith("http"):
+                            _need.append(u)
+        cache_map = await get_url_uc_cached_map(_need) if _need else {}
+
     def _inject(field):
         v = row.get(field)
         if not v:
@@ -1260,10 +1278,7 @@ async def inject_mentions_uc_into_result(row: dict, cache_map: dict = None) -> d
                 continue
             if "mentions_uc" in item and item.get("mentions_uc") is not None:
                 continue  # 已注入过
-            if cache_map is not None:
-                mu = cache_map.get(url)
-            else:
-                mu = await get_url_uc_cached(url)
+            mu = cache_map.get(url)
             # 缓存里没有(None未缓存)时，前端会显示"未检测"；这里显式写 null
             item["mentions_uc"] = mu
             changed = True

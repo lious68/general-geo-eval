@@ -361,11 +361,13 @@ def _analysis_to_dict(a) -> Dict:
                                 for k, v in a.competitor_mentions.items()},
         "citations": [{"citation_type": c.citation_type, "content": c.content,
                         "position": c.position, "source_channel": c.source_channel,
-                        "is_ucloud": c.is_ucloud}
+                        "is_ucloud": c.is_ucloud,
+                        "citation_channel": getattr(c, "citation_channel", "pretraining")}
                        for c in a.citations],
         "all_cited_urls": [{"citation_type": c.citation_type, "content": c.content,
                             "position": c.position, "source_channel": c.source_channel,
-                            "is_ucloud": c.is_ucloud}
+                            "is_ucloud": c.is_ucloud,
+                            "citation_channel": getattr(c, "citation_channel", "pretraining")}
                            for c in a.all_cited_urls],
         "error_message": a.error_message,
     }

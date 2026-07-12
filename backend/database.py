@@ -1149,14 +1149,14 @@ async def backfill_citations(run_id: str) -> int:
             citations_json = json.dumps(
                 [{"citation_type": c.citation_type, "content": c.content,
                   "position": c.position, "source_channel": c.source_channel,
-                  "is_ucloud": c.is_ucloud}
+                  "is_ucloud": c.is_ucloud, "citation_channel": getattr(c, "citation_channel", "pretraining")}
                  for c in result.citations],
                 ensure_ascii=False
             )
             all_urls_json = json.dumps(
                 [{"citation_type": c.citation_type, "content": c.content,
                   "position": c.position, "source_channel": c.source_channel,
-                  "is_ucloud": c.is_ucloud}
+                  "is_ucloud": c.is_ucloud, "citation_channel": getattr(c, "citation_channel", "pretraining")}
                  for c in result.all_cited_urls],
                 ensure_ascii=False
             )

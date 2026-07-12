@@ -39,9 +39,10 @@ class CitationInfo:
     """引用信息"""
     citation_type: str     # url / reference
     content: str           # 引用内容
-    position: int          # 位置
+    position: int          # 位置（<0=搜索API返回，>=0=模型正文中出现）
     source_channel: str = ""   # 来源渠道（仅url类型，如"UCloud官网"、"知乎"等）
     is_ucloud: bool = False    # 是否为UCloud相关引用
+    citation_channel: str = "pretraining"  # 引用构成分类：pretraining/web_search/user_provided/undetected
 
 
 @dataclass
@@ -621,6 +622,7 @@ class ResponseAnalyzer:
                 position=position,
                 source_channel=channel,
                 is_ucloud=is_uc,
+                citation_channel="web_search",
             )
 
             # 添加到 all_cited_urls
@@ -635,6 +637,7 @@ class ResponseAnalyzer:
                     position=position,
                     source_channel=channel,
                     is_ucloud=True,
+                    citation_channel="web_search",
                 ))
             else:
                 result.citations.append(CitationInfo(
@@ -643,6 +646,7 @@ class ResponseAnalyzer:
                     position=position,
                     source_channel=channel,
                     is_ucloud=False,
+                    citation_channel="web_search",
                 ))
 
             # 注册到去重集合，防止后续搜索结果重复

@@ -743,6 +743,27 @@ async def compare_runs(run_id_1: str = Query(...), run_id_2: str = Query(...)):
     return {"success": True, "data": {"run_1": scores1, "run_2": scores2}}
 
 
+def _resolve_citation_channel(url_info: dict) -> str:
+    """判定引用构成通道。优先取 citation_channel 字段；无此字段时用 position fallback：
+    position < 0 → web_search，position >= 0 → pretraining，无 position → undetected。"""
+    channel = url_info.get("citation_channel")
+    if channel and channel in ("pretraining", "user_provided", "web_search", "undetected"):
+        return channel
+
+    # Fallback：基于 position 判定（兼容已有数据）
+    pos = url_info.get("position")
+    if pos is not None:
+        try:
+            if int(pos) < 0:
+                return "web_search"
+            else:
+                return "pretraining"
+        except (TypeError, ValueError):
+            pass
+
+    return "undetected"
+
+
 @router.get("/{run_id}/citation-breakdown")
 async def get_citation_breakdown(run_id: str, model_key: Optional[str] = None,
                                  task_id: Optional[str] = None):
@@ -791,11 +812,8 @@ async def get_citation_breakdown(run_id: str, model_key: Optional[str] = None,
                 continue
             seen_urls.add(url_content)
 
-            channel = url_info.get("citation_channel", "undetected")
-            if channel in counts:
-                counts[channel] += 1
-            else:
-                counts["undetected"] += 1
+            channel = _resolve_citation_channel(url_info)
+            counts[channel] += 1
 
         # 也统计 citations 字段中的引用
         cits_raw = r.get("citations", "[]")
@@ -819,11 +837,8 @@ async def get_citation_breakdown(run_id: str, model_key: Optional[str] = None,
                 continue
             seen_urls.add(url_content)
 
-            channel = cit.get("citation_channel", "undetected")
-            if channel in counts:
-                counts[channel] += 1
-            else:
-                counts["undetected"] += 1
+            channel = _resolve_citation_channel(cit)
+            counts[channel] += 1
 
     total = sum(counts.values())
     return {

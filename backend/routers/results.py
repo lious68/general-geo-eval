@@ -743,6 +743,101 @@ async def compare_runs(run_id_1: str = Query(...), run_id_2: str = Query(...)):
     return {"success": True, "data": {"run_1": scores1, "run_2": scores2}}
 
 
+@router.get("/{run_id}/citation-breakdown")
+async def get_citation_breakdown(run_id: str, model_key: Optional[str] = None,
+                                 task_id: Optional[str] = None):
+    """引用构成统计：按 citation_channel 四类（预训练/用户提供/网络搜索/未检测）计数。
+
+    只读端点，返回 {pretraining: N, user_provided: N, web_search: N, undetected: N, total: N}。
+    task_id 模式：按大任务聚合该模型（或全部模型）的 analysis_results（跨批次去重），
+    run_id 传 "0" 占位、不做 run 存在性校验。
+    """
+    if task_id:
+        all_results = await db.get_task_results(task_id, model_key)
+    else:
+        run = await db.get_run(run_id)
+        if not run:
+            raise HTTPException(404, "评测不存在")
+        all_results = await db.get_results(run_id, model_key)
+
+    # 四类计数器
+    counts = {"pretraining": 0, "user_provided": 0, "web_search": 0, "undetected": 0}
+
+    for r in all_results:
+        has_error = r.get("error_message") and r["error_message"] != ""
+        if has_error:
+            continue
+
+        # 从 all_cited_urls 解析引用，统计每条的 citation_channel
+        urls_raw = r.get("all_cited_urls", "[]")
+        if isinstance(urls_raw, str):
+            try:
+                urls_list = json.loads(urls_raw)
+            except (json.JSONDecodeError, TypeError):
+                urls_list = []
+        elif isinstance(urls_raw, list):
+            urls_list = urls_raw
+        else:
+            urls_list = []
+
+        seen_urls = set()
+        for url_info in urls_list:
+            if not isinstance(url_info, dict):
+                continue
+            if url_info.get("citation_type") != "url":
+                continue
+            url_content = url_info.get("content", "")
+            if not url_content or url_content in seen_urls:
+                continue
+            seen_urls.add(url_content)
+
+            channel = url_info.get("citation_channel", "undetected")
+            if channel in counts:
+                counts[channel] += 1
+            else:
+                counts["undetected"] += 1
+
+        # 也统计 citations 字段中的引用
+        cits_raw = r.get("citations", "[]")
+        if isinstance(cits_raw, str):
+            try:
+                cits_list = json.loads(cits_raw)
+            except (json.JSONDecodeError, TypeError):
+                cits_list = []
+        elif isinstance(cits_raw, list):
+            cits_list = cits_raw
+        else:
+            cits_list = []
+
+        for cit in cits_list:
+            if not isinstance(cit, dict):
+                continue
+            if cit.get("citation_type") != "url":
+                continue
+            url_content = cit.get("content", "")
+            if not url_content or url_content in seen_urls:
+                continue
+            seen_urls.add(url_content)
+
+            channel = cit.get("citation_channel", "undetected")
+            if channel in counts:
+                counts[channel] += 1
+            else:
+                counts["undetected"] += 1
+
+    total = sum(counts.values())
+    return {
+        "success": True,
+        "data": {
+            "pretraining": counts["pretraining"],
+            "user_provided": counts["user_provided"],
+            "web_search": counts["web_search"],
+            "undetected": counts["undetected"],
+            "total": total,
+        },
+    }
+
+
 @router.get("/{run_id}/quality-check")
 async def get_quality_check(run_id: str, model_key: Optional[str] = None,
                             task_id: Optional[str] = None):

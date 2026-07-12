@@ -68,3 +68,11 @@ export function recalculateTaskScores(taskId) {
 export function recalculateAllTaskScores() {
   return apiFetch('/tasks/recalculate-all', { method: 'POST' })
 }
+
+export function getCitationBreakdown(runId, params = {}) {
+  const q = new URLSearchParams()
+  if (params.task_id) q.append('task_id', params.task_id)
+  if (params.model_key) q.append('model_key', params.model_key)
+  const qs = q.toString() ? `?${q.toString()}` : ''
+  return apiFetch(`/api/results/${runId}/citation-breakdown${qs}`)
+}

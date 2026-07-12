@@ -134,6 +134,31 @@
             </el-card>
           </el-col>
         </el-row>
+
+        <!-- 引用构成概览 -->
+        <el-row :gutter="16" style="margin-top:16px">
+          <el-col :span="24">
+            <el-card shadow="hover">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                <el-icon><Link /></el-icon>
+                <span style="font-weight:600;font-size:14px">引用构成</span>
+                <el-tooltip placement="top" effect="light" :width="320">
+                  <template #content>
+                    <div class="formula-tooltip">
+                      <div class="formula-desc">统计所有引用来源的四类构成：预训练知识、用户提供资料、网络搜索、未检测</div>
+                    </div>
+                  </template>
+                  <el-icon class="formula-trigger" style="cursor:help"><InfoFilled /></el-icon>
+                </el-tooltip>
+              </div>
+              <CitationBreakdownBar
+                :run-id="route.query.run_id || '0'"
+                :task-id="selectedTaskId"
+                :model-key="null"
+              />
+            </el-card>
+          </el-col>
+        </el-row>
       </div>
 
       <!-- 各渠道(模型)分值详情 -->
@@ -254,6 +279,15 @@
                 {{ row.avg_rank ? row.avg_rank.toFixed(1) : '-' }}
               </template>
             </el-table-column>
+            <el-table-column label="引用构成" width="260">
+              <template #default="{ row }">
+                <CitationBreakdownBar
+                  :run-id="route.query.run_id || '0'"
+                  :task-id="selectedTaskId"
+                  :model-key="row.model_key"
+                />
+              </template>
+            </el-table-column>
             <el-table-column label="明细" width="90" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="openDrilldown(row.model_key)">
@@ -347,6 +381,13 @@
                   <div class="expand-text" v-else style="color:#999">（无回答内容）</div>
                   <div v-if="(row.cited_urls || []).length" class="expand-cites">
                     <div class="expand-cites-label">📎 引用来源（{{ row.cited_urls.length }}）：</div>
+                    <div style="margin-bottom:12px">
+                      <CitationBreakdownBar
+                        :run-id="route.query.run_id || '0'"
+                        :task-id="selectedTaskId"
+                        :model-key="drilldownModelKey"
+                      />
+                    </div>
                     <div v-for="(u, i) in row.cited_urls" :key="i" class="expand-cite-row">
                       <el-tag v-if="u.is_ucloud" size="small" type="success" effect="dark">UCloud</el-tag>
                       <el-tooltip v-if="u.mentions_uc === true" content="该链接文章正文出现 UCloud/优刻得关键词" placement="top">
@@ -486,6 +527,7 @@ import { renderMarkdown } from '../composables/useMarkdown'
 import { ElMessage } from 'element-plus'
 import { listTasks } from '../api/tasks'
 import { useCurrentBrand, onBrandChanged } from '../composables/useCurrentBrand'
+import CitationBreakdownBar from '../components/CitationBreakdownBar.vue'
 const { currentBrand } = useCurrentBrand()
 let unsubBrand = null
 

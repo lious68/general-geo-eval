@@ -1,58 +1,75 @@
 <template>
   <div class="citation-breakdown-bar">
-    <div v-if="loading" class="bar-loading">加载中...</div>
-    <div v-else-if="breakdown && breakdown.total > 0">
-      <div class="bar-container">
-        <div
-          v-if="breakdown.pretraining > 0"
-          class="bar-segment pretraining"
-          :style="{ width: getPercentage(breakdown.pretraining) + '%' }"
-          :title="`预训练: ${breakdown.pretraining}`"
-        ></div>
-        <div
-          v-if="breakdown.user_provided > 0"
-          class="bar-segment user-provided"
-          :style="{ width: getPercentage(breakdown.user_provided) + '%' }"
-          :title="`用户提供: ${breakdown.user_provided}`"
-        ></div>
-        <div
-          v-if="breakdown.web_search > 0"
-          class="bar-segment web-search"
-          :style="{ width: getPercentage(breakdown.web_search) + '%' }"
-          :title="`网络搜索: ${breakdown.web_search}`"
-        ></div>
-        <div
-          v-if="breakdown.undetected > 0"
-          class="bar-segment undetected"
-          :style="{ width: getPercentage(breakdown.undetected) + '%' }"
-          :title="`未检测: ${breakdown.undetected}`"
-        ></div>
-      </div>
-      <div v-if="showLegend" class="legend">
-        <span class="legend-item">
-          <span class="legend-color pretraining"></span>
-          预训练 ({{ breakdown.pretraining }})
-        </span>
-        <span class="legend-item">
-          <span class="legend-color user-provided"></span>
-          用户提供 ({{ breakdown.user_provided }})
-        </span>
-        <span class="legend-item">
-          <span class="legend-color web-search"></span>
-          网络搜索 ({{ breakdown.web_search }})
-        </span>
-        <span class="legend-item">
-          <span class="legend-color undetected"></span>
-          未检测 ({{ breakdown.undetected }})
-        </span>
-      </div>
+    <!-- 折叠状态：显示切换按钮 -->
+    <div v-if="collapsed" class="bar-collapsed">
+      <el-button size="small" link type="primary" @click="$emit('update:collapsed', false)">
+        📊 引用构成
+      </el-button>
     </div>
-    <div v-else class="bar-empty">无引用数据</div>
+
+    <!-- 展开状态 -->
+    <template v-else>
+      <div v-if="loading" class="bar-loading">加载中...</div>
+      <div v-else-if="breakdown && breakdown.total > 0">
+        <div class="bar-header">
+          <span class="bar-title">引用构成（共 {{ breakdown.total }}）</span>
+          <el-button size="small" link type="info" @click="$emit('update:collapsed', true)">收起</el-button>
+        </div>
+        <div class="bar-container">
+          <div
+            v-if="breakdown.pretraining > 0"
+            class="bar-segment pretraining"
+            :style="{ width: getPercentage(breakdown.pretraining) + '%' }"
+            :title="`预训练: ${breakdown.pretraining}`"
+          ></div>
+          <div
+            v-if="breakdown.user_provided > 0"
+            class="bar-segment user-provided"
+            :style="{ width: getPercentage(breakdown.user_provided) + '%' }"
+            :title="`用户提供: ${breakdown.user_provided}`"
+          ></div>
+          <div
+            v-if="breakdown.web_search > 0"
+            class="bar-segment web-search"
+            :style="{ width: getPercentage(breakdown.web_search) + '%' }"
+            :title="`网络搜索: ${breakdown.web_search}`"
+          ></div>
+          <div
+            v-if="breakdown.undetected > 0"
+            class="bar-segment undetected"
+            :style="{ width: getPercentage(breakdown.undetected) + '%' }"
+            :title="`未检测: ${breakdown.undetected}`"
+          ></div>
+        </div>
+        <div v-if="showLegend" class="legend">
+          <span class="legend-item">
+            <span class="legend-color pretraining"></span>
+            预训练 ({{ breakdown.pretraining }})
+          </span>
+          <span class="legend-item">
+            <span class="legend-color user-provided"></span>
+            用户提供 ({{ breakdown.user_provided }})
+          </span>
+          <span class="legend-item">
+            <span class="legend-color web-search"></span>
+            网络搜索 ({{ breakdown.web_search }})
+          </span>
+          <span class="legend-item">
+            <span class="legend-color undetected"></span>
+            未检测 ({{ breakdown.undetected }})
+          </span>
+        </div>
+      </div>
+      <div v-else class="bar-empty">
+        无引用数据
+        <el-button size="small" link type="info" @click="$emit('update:collapsed', true)" style="margin-left:4px">收起</el-button>
+      </div>
+    </template>
   </div>
 </template>
 
 <script>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import { apiFetch } from '../composables/useWebSocket'
 
 export default {
@@ -73,13 +90,51 @@ export default {
     showLegend: {
       type: Boolean,
       default: false
+    },
+    // 直接传入引用URL数组（单题模式），每个元素含 citation_channel 字段
+    urls: {
+      type: Array,
+      default: null
+    },
+    // 是否折叠
+    collapsed: {
+      type: Boolean,
+      default: true
     }
   },
-  setup(props) {
+  emits: ['update:collapsed'],
+  setup(props, { emit }) {
     const breakdown = ref(null)
     const loading = ref(false)
 
+    function computeFromUrls() {
+      if (!props.urls || !props.urls.length) {
+        breakdown.value = null
+        return
+      }
+      const counts = { pretraining: 0, user_provided: 0, web_search: 0, undetected: 0 }
+      const seen = new Set()
+      for (const u of props.urls) {
+        const url = u.content || u.url || ''
+        if (!url || seen.has(url)) continue
+        seen.add(url)
+        const ch = u.citation_channel || 'undetected'
+        if (counts.hasOwnProperty(ch)) {
+          counts[ch]++
+        } else {
+          counts.undetected++
+        }
+      }
+      breakdown.value = { ...counts, total: Object.values(counts).reduce((a, b) => a + b, 0) }
+    }
+
     async function loadBreakdown() {
+      // 如果有 urls prop，直接从 urls 计算
+      if (props.urls !== null) {
+        computeFromUrls()
+        return
+      }
+
       loading.value = true
       try {
         let url = `/results/${props.runId}/citation-breakdown`
@@ -103,7 +158,7 @@ export default {
       return (count / breakdown.value.total) * 100
     }
 
-    watch(() => [props.runId, props.taskId, props.modelKey], loadBreakdown, { immediate: true })
+    watch(() => [props.runId, props.taskId, props.modelKey, props.urls], loadBreakdown, { immediate: true })
 
     return { breakdown, loading, getPercentage }
   }
@@ -115,6 +170,24 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.bar-collapsed {
+  display: flex;
+  align-items: center;
+}
+
+.bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #606266;
+}
+
+.bar-title {
+  font-size: 12px;
+  color: #909399;
 }
 
 .bar-container {

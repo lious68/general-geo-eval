@@ -155,6 +155,7 @@
                 :run-id="route.query.run_id || '0'"
                 :task-id="selectedTaskId"
                 :model-key="null"
+                v-model:collapsed="citationOverviewCollapsed"
               />
             </el-card>
           </el-col>
@@ -285,6 +286,8 @@
                   :run-id="route.query.run_id || '0'"
                   :task-id="selectedTaskId"
                   :model-key="row.model_key"
+                  :collapsed="tableCitationCollapsed[row.model_key] !== false"
+                  @update:collapsed="(v) => tableCitationCollapsed[row.model_key] = v"
                 />
               </template>
             </el-table-column>
@@ -386,6 +389,8 @@
                         :run-id="route.query.run_id || '0'"
                         :task-id="selectedTaskId"
                         :model-key="drilldownModelKey"
+                        :urls="row.cited_urls || []"
+                        v-model:collapsed="questionCitationCollapsed[`${drilldownModelKey}_${row.question_id}`]"
                       />
                     </div>
                     <div v-for="(u, i) in row.cited_urls" :key="i" class="expand-cite-row">
@@ -558,6 +563,11 @@ const citationDetails = ref({})
 const channelClustering = ref({})
 const activeCitationPanels = ref([])
 const channelChartRef = ref(null)
+
+// 引用构成条折叠状态
+const citationOverviewCollapsed = ref(true)
+const tableCitationCollapsed = ref({})
+const questionCitationCollapsed = ref({})
 
 const hasCitationData = computed(() => Object.keys(citationDetails.value).length > 0)
 const hasChannelData = computed(() => Object.keys(channelClustering.value).length > 0)

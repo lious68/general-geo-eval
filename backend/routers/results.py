@@ -56,6 +56,27 @@ def _classify_url_type(url: str) -> str:
         return "AI生成的引用"
 
 
+def _resolve_citation_channel(url_info: dict) -> str:
+    """判定引用构成通道。优先取 citation_channel 字段；无此字段时用 position fallback：
+    position < 0 → web_search，position >= 0 → pretraining，无 position → undetected。"""
+    channel = url_info.get("citation_channel")
+    if channel and channel in ("pretraining", "user_provided", "web_search", "undetected"):
+        return channel
+
+    # Fallback：基于 position 判定（兼容已有数据）
+    pos = url_info.get("position")
+    if pos is not None:
+        try:
+            if int(pos) < 0:
+                return "web_search"
+            else:
+                return "pretraining"
+        except (TypeError, ValueError):
+            pass
+
+    return "undetected"
+
+
 def _extract_cited_urls(r: dict, cache_map: dict = None) -> list:
     """从一条 analysis_result 解析出供前端渲染的引用链接清单。
 
@@ -98,6 +119,8 @@ def _extract_cited_urls(r: dict, cache_map: dict = None) -> list:
             "is_ucloud": bool(u.get("is_ucloud")),
             "source_channel": u.get("source_channel") or _resolve_domain_label(c),
             "mentions_uc": mu,  # True/False/None
+            "position": u.get("position"),
+            "citation_channel": _resolve_citation_channel(u),
         })
     return out
 
@@ -741,27 +764,6 @@ async def compare_runs(run_id_1: str = Query(...), run_id_2: str = Query(...)):
     scores1 = await db.get_scores(run_id_1)
     scores2 = await db.get_scores(run_id_2)
     return {"success": True, "data": {"run_1": scores1, "run_2": scores2}}
-
-
-def _resolve_citation_channel(url_info: dict) -> str:
-    """判定引用构成通道。优先取 citation_channel 字段；无此字段时用 position fallback：
-    position < 0 → web_search，position >= 0 → pretraining，无 position → undetected。"""
-    channel = url_info.get("citation_channel")
-    if channel and channel in ("pretraining", "user_provided", "web_search", "undetected"):
-        return channel
-
-    # Fallback：基于 position 判定（兼容已有数据）
-    pos = url_info.get("position")
-    if pos is not None:
-        try:
-            if int(pos) < 0:
-                return "web_search"
-            else:
-                return "pretraining"
-        except (TypeError, ValueError):
-            pass
-
-    return "undetected"
 
 
 @router.get("/{run_id}/citation-breakdown")

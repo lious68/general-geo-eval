@@ -95,26 +95,28 @@ def _resolve_citation_channel(url_info: dict) -> str:
 def _extract_cited_urls(r: dict, cache_map: dict = None) -> list:
     """从一条 analysis_result 解析出供前端渲染的引用链接清单。
 
-    all_cited_urls 在库里是 JSON 字符串（或已解析数组），取其中 citation_type=url
-    的项，按 content(URL) 去重，返回 [{content, is_ucloud, source_channel, mentions_uc}]。
-    供前端结果展示区把引用渲染成可点链接，而不只是 raw_content 纯文本。
+    同时读 all_cited_urls（URL引用）和 citations（含文本引用如"据UCloud官网…"），
+    按 content 去重，返回 [{content, is_ucloud, source_channel, mentions_uc, citation_channel}]。
+    文本引用无 URL，citation_type 为 "reference"，citation_channel 为 "pretraining"。
 
     mentions_uc = 该 URL 网页正文是否出现 UCloud/优刻得（来自 url_uc_cache 缓存）：
       True/False/None(未检测)。cache_map 为预取的 {url: mentions_uc}，避免逐条查库。
     """
-    urls_raw = r.get("all_cited_urls", "[]")
-    if isinstance(urls_raw, str):
-        try:
-            urls_list = json.loads(urls_raw)
-        except (json.JSONDecodeError, TypeError):
-            urls_list = []
-    elif isinstance(urls_raw, list):
-        urls_list = urls_raw
-    else:
-        urls_list = []
+    def _parse_json(raw):
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
     seen = set()
     out = []
-    for u in urls_list:
+
+    # 1. all_cited_urls — URL 引用
+    for u in _parse_json(r.get("all_cited_urls", "[]")):
         if not isinstance(u, dict):
             continue
         if u.get("citation_type") and u.get("citation_type") != "url":
@@ -125,7 +127,6 @@ def _extract_cited_urls(r: dict, cache_map: dict = None) -> list:
         if c in seen:
             continue
         seen.add(c)
-        # mentions_uc：优先用行内已注入的，否则查 cache_map，否则 None（前端显示"未检测"）
         mu = u.get("mentions_uc")
         if mu is None and cache_map is not None:
             mu = cache_map.get(c)
@@ -133,10 +134,47 @@ def _extract_cited_urls(r: dict, cache_map: dict = None) -> list:
             "content": c,
             "is_ucloud": bool(u.get("is_ucloud")),
             "source_channel": u.get("source_channel") or _resolve_domain_label(c),
-            "mentions_uc": mu,  # True/False/None
+            "mentions_uc": mu,
             "position": u.get("position"),
             "citation_channel": _resolve_citation_channel(u),
         })
+
+    # 2. citations — 文本引用（citation_type="reference"，如"据UCloud官网…"）
+    for cit in _parse_json(r.get("citations", "[]")):
+        if not isinstance(cit, dict):
+            continue
+        ct = cit.get("citation_type", "")
+        if ct == "url":
+            # URL 引用已在 all_cited_urls 中处理，这里只补文本引用
+            c = cit.get("content") or cit.get("url") or ""
+            if c and c not in seen:
+                seen.add(c)
+                mu = cit.get("mentions_uc")
+                if mu is None and cache_map is not None:
+                    mu = cache_map.get(c)
+                out.append({
+                    "content": c,
+                    "is_ucloud": bool(cit.get("is_ucloud")),
+                    "source_channel": cit.get("source_channel") or _resolve_domain_label(c),
+                    "mentions_uc": mu,
+                    "position": cit.get("position"),
+                    "citation_channel": _resolve_citation_channel(cit),
+                })
+        elif ct == "reference":
+            # 文本引用：用 content（文本短语）去重
+            c = cit.get("content", "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            out.append({
+                "content": c,
+                "is_ucloud": bool(cit.get("is_ucloud", True)),
+                "source_channel": "文本引用",
+                "mentions_uc": None,
+                "position": cit.get("position"),
+                "citation_channel": _resolve_citation_channel(cit),
+            })
+
     return out
 
 

@@ -987,3 +987,457 @@ async def get_quality_check(run_id: str, model_key: Optional[str] = None,
             "bad": bad_list,
         },
     }
+
+
+# ============================================================
+# 行动计划诊断端点（纯只读，不改任何分数）
+# ============================================================
+# 来源渠道权威性分层（纯展示用，不进分数判定）。
+# 官方层走 brand_profile.is_official_url（当前品牌档案，不硬编码 UCloud）；
+# 其余按域名关键词归层。
+_AUTHORITY_REFERENCE_DOMAINS = [
+    "github.com", "gitee.com", "wikipedia.org", "baike.baidu.com",
+    "stackoverflow.com", "readthedocs.io", "pypi.org", "npmjs.com", "docs.rs",
+]
+_AUTHORITY_COMMUNITY_DOMAINS = [
+    "zhihu.com", "csdn.net", "juejin.cn", "segmentfault.com", "cnblogs.com",
+    "infoq.cn", "oschina.net", "oscimg.com", "mp.weixin.qq.com", "51cto.com",
+    "jianshu.com",
+]
+_UGC_DOMAINS = [
+    "toutiao.com", "baijiahao.baidu.com", "sohu.com", "163.com",
+    "weibo.com", "xiaohongshu.com", "36kr.com", "iesdouyin.com", "douyin.com",
+]
+
+
+def _domain_of(url: str) -> str:
+    try:
+        d = urlparse(url).netloc.lower()
+        if ":" in d:
+            d = d.split(":")[0]
+        if d.startswith("www."):
+            d = d[4:]
+        return d
+    except Exception:
+        return ""
+
+
+def _authority_tier(url: str, profile) -> str:
+    """把一条 URL 归入五类权威性分层（纯展示）。profile 为 brand_profile。"""
+    if profile and profile.is_official_url(url):
+        return "官方"
+    d = _domain_of(url)
+    if not d:
+        return "未映射"
+    if any(x in d for x in _AUTHORITY_REFERENCE_DOMAINS):
+        return "权威参考"
+    if any(x in d for x in _AUTHORITY_COMMUNITY_DOMAINS):
+        return "权威社区"
+    if any(x in d for x in _UGC_DOMAINS):
+        return "一般UGC"
+    # resolve_channel 命中"其他"的也算未映射
+    try:
+        from config import resolve_channel, DEFAULT_CHANNEL
+        ch = resolve_channel(url)
+        return "未映射" if ch == DEFAULT_CHANNEL else "其他已映射"
+    except Exception:
+        return "未映射"
+
+
+def _guess_template_type(content: str) -> str:
+    """根据回答正文启发式判断它用的是哪种'赢的结构'。"""
+    if not content:
+        return "常规"
+    if len(content) > 6000 and ("一、" in content or "二、" in content or "三、" in content):
+        return "选型指南型"
+    # 表格分隔或对比
+    if content.count("|") >= 6 or "对比" in content[:400] or "表格" in content[:400]:
+        return "对比表格型"
+    return "常规"
+
+
+def _build_action_items(diag: dict, profile) -> list:
+    """规则引擎：从聚合诊断数据生成 P0/P1/P2/P3 行动项。
+    每条行动项 evidence 必须是真实算出来的数/题号。"""
+    items = []
+    by_cat = diag["by_category"]
+    gap_qs = diag["gap_questions"]
+    strength_qs = diag["strength_questions"]
+    by_model = diag["by_model"]
+    channels = diag["channels"]
+    templates = diag["templates"]
+    brand_name = (profile.brand_name if profile else "品牌") or "品牌"
+
+    # P0-1: 洼地品类（引用率 0 或 自然题提及率 <20%）
+    for c in by_cat:
+        if c["n"] == 0:
+            continue
+        is_gap = (c["cited_pct"] == 0) or (c["mentioned_pct"] < 0.20)
+        if not is_gap:
+            continue
+        cat = c["category"]
+        cat_gaps = [g["qid"] for g in gap_qs if g["category"] == cat]
+        evidence = (f"{cat}：自然题 {c['n']} 道，提及率 {c['mentioned_pct']*100:.0f}%、"
+                    f"引用率 {c['cited_pct']*100:.0f}%、TOP3 {c['top3_pct']*100:.0f}%")
+        actions = [f"用「选型指南型」模板做一篇 {cat} 完整排名长文，{brand_name} 排第一并给最强标签"]
+        if cat_gaps:
+            actions.append(f"先补这些全空白题：{', '.join(cat_gaps[:6])}")
+        items.append({
+            "priority": "P0",
+            "title": f"补 {cat} 品类内容（洼地）",
+            "evidence": evidence,
+            "actions": actions,
+        })
+
+    # P0-2: 标杆复制（强项品类的模板往洼地搬）
+    strong_cats = {}
+    for s in strength_qs:
+        strong_cats.setdefault(s["category"], []).append(s)
+    for cat, sqs in strong_cats.items():
+        # 找该品类用的模板类型
+        cat_tpls = [t for t in templates if any(s["qid"] == t["qid"] for s in sqs)]
+        tpl_type = cat_tpls[0]["template_type"] if cat_tpls else "选型指南型"
+        # 找一个洼地品类作为目标
+        target = next((c for c in by_cat
+                       if c["category"] != cat and c["n"] > 0
+                       and (c["cited_pct"] == 0 or c["mentioned_pct"] < 0.20)), None)
+        if not target:
+            continue
+        evidence = (f"{cat} 已是强项（{len(sqs)} 道题 ≥3 模型提及），标杆模板：{tpl_type}；"
+                    f"目标洼地：{target['category']}（引用率 {target['cited_pct']*100:.0f}%）")
+        items.append({
+            "priority": "P0",
+            "title": f"把 {cat} 的「{tpl_type}」模板复制到 {target['category']}",
+            "evidence": evidence,
+            "actions": [
+                f"参考标杆：{', '.join(s['qid'] for s in sqs[:3])}（{tpl_type}）",
+                f"对 {target['category']} 的每道题套用同结构，{brand_name} 进对比表同列",
+            ],
+        })
+
+    # P1-1: 每道强项题做对比表格内容
+    for s in strength_qs[:5]:
+        items.append({
+            "priority": "P1",
+            "title": f"扩大强项题 {s['qid']} 的内容覆盖",
+            "evidence": f"{s['qid']}（{s['category']}）：{s['mention_models']}/5 模型已提及",
+            "actions": [
+                "做对比表格型内容，品牌进同列 + 价格硬数据",
+                "首发 CSDN/知乎/官网 docs 三处（高质三方社区已被验证会引）",
+            ],
+        })
+
+    # P1-2: 官网内容（官方占比低且仍有提及的模型）
+    for m in by_model:
+        if m["n"] == 0:
+            continue
+        if m["official_url_ratio"] < 0.10 and m["mentioned"] > 0:
+            items.append({
+                "priority": "P1",
+                "title": f"官网 docs 补差异化段（针对 {m['model_key']}）",
+                "evidence": (f"{m['model_key']}：官方URL占比仅 {m['official_url_ratio']*100:.0f}%，"
+                             f"但提及率 {m['mentioned']/m['n']*100:.0f}%（仍有抓取能力）"),
+                "actions": [
+                    "每个产品 docs 页补「对比竞品差异化 + 独家卖点」段",
+                    "H1 含品牌词 + 官网域名，便于该模型抓到带品牌词的页面",
+                ],
+            })
+
+    # P1-3: 渠道映射补录（未映射 TOP5 域名）
+    unmapped = [c for c in channels if c["tier"] in ("未映射", "其他已映射")]
+    # 用域名级聚合（channels 已是 tier+channel 聚合，这里直接取未映射渠道 TOP5）
+    top_unmapped = sorted(unmapped, key=lambda x: x["count"], reverse=True)[:5]
+    if top_unmapped:
+        names = [f"{c['channel']}({c['count']})" for c in top_unmapped]
+        items.append({
+            "priority": "P1",
+            "title": "给高频未映射域名建渠道映射",
+            "evidence": f"未映射/其他类占比较大，TOP5：{', '.join(names)}",
+            "actions": [
+                "在 core/config.py 的 URL_CHANNEL_MAPPING 补录这些域名（纯展示，不改分数）",
+                "若其中有官方域名（如 ucloud-global.com），登记进 official_domains 需单独评估（会微调引用率）",
+            ],
+        })
+
+    # P2: 弱模型（提及率 <20%）
+    for m in by_model:
+        if m["n"] == 0:
+            continue
+        if m["mentioned"] / m["n"] < 0.20:
+            items.append({
+                "priority": "P2",
+                "title": f"针对弱模型 {m['model_key']} 铺内容",
+                "evidence": f"{m['model_key']}：自然题提及率仅 {m['mentioned']/m['n']*100:.0f}%（{m['mentioned']}/{m['n']}）",
+                "actions": [
+                    f"{m['model_key']} 官方引用占比 {m['official_url_ratio']*100:.0f}%，主要靠正文知识而非官网",
+                    "在知乎/CSDN 正文植入品牌词（不依赖官网被抓）",
+                ],
+            })
+
+    # P3: 低质 UGC 只分发
+    ugc = [c for c in channels if c["tier"] == "一般UGC"]
+    top_ugc = sorted(ugc, key=lambda x: x["count"], reverse=True)[:3]
+    if top_ugc:
+        items.append({
+            "priority": "P3",
+            "title": "低质 UGC 渠道降优先级",
+            "evidence": f"一般UGC被引TOP3：{', '.join(c['channel'] for c in top_ugc)}",
+            "actions": ["只做分发不做原创，把力气挪到权威社区/官网 docs"],
+        })
+
+    # 排序：P0 → P1 → P2 → P3
+    order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    items.sort(key=lambda x: order.get(x["priority"], 9))
+    return items
+
+
+@router.get("/{run_id}/action-plan")
+async def get_action_plan(run_id: str, model_key: Optional[str] = None,
+                          task_id: Optional[str] = None):
+    """行动计划诊断（纯只读）：聚合自然题表现 + 渠道分布 + 标杆模板 + 数据驱动的行动项。
+
+    不改 analysis_results / geo_scores / 任何分数。所有口径复用：
+    - 自然题：db.is_natural_question
+    - 有效引用：db.has_effective_citation
+    - 渠道：config.resolve_channel + brand_profile.is_official_url
+
+    task_id 模式：按大任务聚合（跨批次去重），run_id 传 "0" 占位、不做存在性校验
+    （与 citation-breakdown / question-drilldown 同形）。
+    """
+    if task_id:
+        all_results = await db.get_task_results(task_id, model_key)
+    else:
+        run = await db.get_run(run_id)
+        if not run:
+            raise HTTPException(404, "评测不存在")
+        all_results = await db.get_results(run_id, model_key)
+
+    if not all_results:
+        return {"success": True, "data": {
+            "task_id": task_id, "summary": {}, "by_model": [], "by_category": [],
+            "gap_questions": [], "strength_questions": [], "channels": [],
+            "templates": [], "action_items": [],
+        }}
+
+    # 关联 questions 表
+    db_conn = await db.get_db()
+    question_map = {}
+    try:
+        cursor = await db_conn.execute("SELECT id, question, category, question_type FROM questions")
+        for row in await cursor.fetchall():
+            question_map[row["id"]] = {
+                "text": row["question"], "category": row["category"], "type": row["question_type"]
+            }
+    finally:
+        await db_conn.close()
+
+    profile = db.get_brand_profile()
+
+    # 按 (qid) 收集每题各模型结果，用于判定"全空白/强项"
+    by_qid = {}  # qid -> list of result rows (valid only)
+    natural_qids = set()
+    leading_qids = set()
+    for r in all_results:
+        qid = r.get("question_id", "")
+        q_info = question_map.get(qid, {})
+        q_text = q_info.get("text", "")
+        q_cat = q_info.get("category", "")
+        has_error = bool(r.get("error_message"))
+        if has_error:
+            continue
+        is_nat = db.is_natural_question(q_text, q_cat)
+        (natural_qids if is_nat else leading_qids).add(qid)
+        by_qid.setdefault(qid, {"info": q_info, "results": [], "natural": is_nat})
+        by_qid[qid]["results"].append(r)
+
+    # ---- summary（自然题 vs 引导题）----
+    nat_total = 0
+    nat_mentioned = 0
+    nat_cited = 0
+    nat_top3 = 0
+    for qid in natural_qids:
+        for r in by_qid[qid]["results"]:
+            nat_total += 1
+            if r.get("ucloud_mentioned"):
+                nat_mentioned += 1
+            if db.has_effective_citation(r):
+                nat_cited += 1
+            rank = r.get("ucloud_rank")
+            if rank is not None and rank <= 3:
+                nat_top3 += 1
+    summary = {
+        "natural_total": nat_total,
+        "natural_mentioned": nat_mentioned,
+        "natural_cited": nat_cited,
+        "natural_top3": nat_top3,
+        "natural_mention_rate": round(nat_mentioned / nat_total, 4) if nat_total else 0,
+        "natural_cite_rate": round(nat_cited / nat_total, 4) if nat_total else 0,
+        "natural_top3_rate": round(nat_top3 / nat_total, 4) if nat_total else 0,
+        "leading_total": sum(len(by_qid[q]["results"]) for q in leading_qids),
+    }
+
+    # ---- by_model ----
+    model_agg = {}
+    for qid, bucket in by_qid.items():
+        if not bucket["natural"]:
+            continue
+        for r in bucket["results"]:
+            mk = r.get("model_key", "")
+            a = model_agg.setdefault(mk, {"model_key": mk, "n": 0, "mentioned": 0,
+                                          "cited": 0, "top3": 0, "official_urls": 0, "total_urls": 0})
+            a["n"] += 1
+            if r.get("ucloud_mentioned"):
+                a["mentioned"] += 1
+            if db.has_effective_citation(r):
+                a["cited"] += 1
+            rank = r.get("ucloud_rank")
+            if rank is not None and rank <= 3:
+                a["top3"] += 1
+            for u in _parse_json_field(r.get("all_cited_urls")):
+                if not isinstance(u, dict) or u.get("citation_type") != "url":
+                    continue
+                url = u.get("content", "")
+                if not url:
+                    continue
+                a["total_urls"] += 1
+                if profile and profile.is_official_url(url):
+                    a["official_urls"] += 1
+    by_model = []
+    for mk in ["deepseek", "ernie", "doubao", "kimi", "qwen"]:
+        if mk not in model_agg:
+            continue
+        a = model_agg[mk]
+        a["official_url_ratio"] = round(a["official_urls"] / a["total_urls"], 4) if a["total_urls"] else 0
+        by_model.append(a)
+
+    # ---- by_category（仅自然题）----
+    cat_agg = {}
+    cat_gap_qids = {}
+    for qid, bucket in by_qid.items():
+        if not bucket["natural"]:
+            continue
+        cat = bucket["info"].get("category", "") or "未分类"
+        a = cat_agg.setdefault(cat, {"category": cat, "n": 0, "mentioned": 0,
+                                     "cited": 0, "top3": 0, "qids": []})
+        a["qids"].append(qid)
+        for r in bucket["results"]:
+            a["n"] += 1
+            if r.get("ucloud_mentioned"):
+                a["mentioned"] += 1
+            if db.has_effective_citation(r):
+                a["cited"] += 1
+            rank = r.get("ucloud_rank")
+            if rank is not None and rank <= 3:
+                a["top3"] += 1
+    by_category = []
+    for cat, a in cat_agg.items():
+        # 该品类下全空白题（5模型都未提及 —— 这里按"该题所有结果都未提及"）
+        gap_in_cat = []
+        for qid in a["qids"]:
+            if all(not r.get("ucloud_mentioned") for r in by_qid[qid]["results"]):
+                gap_in_cat.append(qid)
+        by_category.append({
+            "category": cat,
+            "n": a["n"],
+            "mentioned_pct": round(a["mentioned"] / a["n"], 4) if a["n"] else 0,
+            "cited_pct": round(a["cited"] / a["n"], 4) if a["n"] else 0,
+            "top3_pct": round(a["top3"] / a["n"], 4) if a["n"] else 0,
+            "gap_qids": gap_in_cat,
+        })
+    by_category.sort(key=lambda x: x["cited_pct"])  # 洼地排前
+
+    # ---- gap_questions / strength_questions ----
+    gap_questions = []
+    strength_questions = []
+    for qid, bucket in by_qid.items():
+        if not bucket["natural"]:
+            continue
+        mention_models = sum(1 for r in bucket["results"] if r.get("ucloud_mentioned"))
+        total_models = len(bucket["results"])
+        q_obj = {"qid": qid, "question": bucket["info"].get("text", ""),
+                 "category": bucket["info"].get("category", ""), "mention_models": mention_models,
+                 "total_models": total_models}
+        if total_models > 0 and mention_models == 0:
+            gap_questions.append(q_obj)
+        elif mention_models >= 3:
+            strength_questions.append(q_obj)
+
+    # ---- channels（五 tier + 渠道名聚合）----
+    chan_counter = {}  # (tier, channel) -> count
+    for r in all_results:
+        if r.get("error_message"):
+            continue
+        for u in _parse_json_field(r.get("all_cited_urls")):
+            if not isinstance(u, dict) or u.get("citation_type") != "url":
+                continue
+            url = u.get("content", "")
+            if not url:
+                continue
+            tier = _authority_tier(url, profile)
+            try:
+                from config import resolve_channel
+                ch = resolve_channel(url)
+            except Exception:
+                ch = "其他"
+            key = (tier, ch)
+            chan_counter[key] = chan_counter.get(key, 0) + 1
+    channels = [{"tier": t, "channel": c, "count": n}
+                for (t, c), n in sorted(chan_counter.items(), key=lambda x: -x[1])]
+
+    # ---- templates（自然题里 TOP3 最长胜出答案）----
+    template_cands = []
+    for qid, bucket in by_qid.items():
+        if not bucket["natural"]:
+            continue
+        for r in bucket["results"]:
+            if not r.get("ucloud_mentioned"):
+                continue
+            rank = r.get("ucloud_rank")
+            if rank is None or rank > 3:
+                continue
+            content = r.get("raw_content", "") or ""
+            template_cands.append({
+                "qid": qid,
+                "model": r.get("model_key", ""),
+                "question": bucket["info"].get("text", ""),
+                "category": bucket["info"].get("category", ""),
+                "rank": rank,
+                "strength": r.get("recommendation_strength", "none"),
+                "len": len(content),
+                "head": content[:400],
+                "template_type": _guess_template_type(content),
+            })
+    template_cands.sort(key=lambda x: -x["len"])
+    templates = template_cands[:3]
+
+    diag = {
+        "summary": summary,
+        "by_model": by_model,
+        "by_category": by_category,
+        "gap_questions": gap_questions,
+        "strength_questions": strength_questions,
+        "channels": channels,
+        "templates": templates,
+    }
+    action_items = _build_action_items(diag, profile)
+
+    return {
+        "success": True,
+        "data": {
+            "task_id": task_id,
+            **diag,
+            "action_items": action_items,
+        },
+    }
+
+
+def _parse_json_field(raw):
+    """把 DB 里 TEXT 存的 JSON 字段安全解析成 list。"""
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []

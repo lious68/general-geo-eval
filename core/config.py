@@ -302,6 +302,27 @@ URL_CHANNEL_MAPPING = {
     "qcc.com": "企查查",
     "cninfo.com.cn": "巨潮资讯",
     "eastmoney.com": "东方财富",
+    # ── 高频被引但原"其他"类域名补录（纯展示标签，不参与分数判定）──
+    # UCloud 国际站（官方引用大量来自它；仅展示归类，is_official 判定走品牌档案 official_domains）
+    "ucloud-global.com": "UCloud国际站",
+    # IDC 垂直测评站（出海/海外题的主要引用源）
+    "idcspy.com": "IDCspy",
+    "idctalk.com": "IDCtalk",
+    "ittellyou.com": "ITTellYou",
+    "henghost.com": "恒创科技",
+    "idcbest.com": "IDCBest",
+    "kufanyun.com": "库范云",
+    "locdd.com": "LOC社区",
+    "cloud.kd.cn": "快科技云",
+    # 财经/科技媒体子域（父域未在表，显式补）
+    "finance.sina.com.cn": "新浪财经",
+    "cj.sina.cn": "新浪财经",
+    "finance.eastmoney.com": "东方财富",
+    "caifuhao.eastmoney.com": "东方财富号",
+    "donews.com": "Donews",
+    "ccidnet.com": "赛迪网",
+    # 抖音内容域
+    "iesdouyin.com": "抖音",
 }
 DEFAULT_CHANNEL = "其他"
 

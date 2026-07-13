@@ -63,6 +63,19 @@
         </el-table-column>
         <el-table-column prop="id" label="run_id" min-width="200" />
       </el-table>
+
+      <!-- 本任务行动计划（基于自然题动态生成） -->
+      <el-card v-if="detail && detail.summary && detail.summary.coverage_rate > 0"
+               shadow="never" class="action-plan-section">
+        <div class="action-plan-header">
+          <el-icon><List /></el-icon>
+          <span>📋 本任务行动计划</span>
+          <el-button size="small" link type="primary" @click="$router.push({ path: '/action-plan', query: { task_id: route.params.taskId } })">
+            前往完整页 →
+          </el-button>
+        </div>
+        <ActionPlanPanel :task-id="route.params.taskId" embedded />
+      </el-card>
     </el-card>
 
     <!-- 导入对话框 -->
@@ -92,6 +105,7 @@ import { ElMessage } from 'element-plus'
 import { isAdmin } from '../composables/useWebSocket'
 import { getTask, importResults } from '../api/tasks'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
+import ActionPlanPanel from '../components/ActionPlanPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -186,4 +200,6 @@ onBeforeUnmount(() => { stopPolling() })
 .matrix td.done { background: #d1fae5; color: #065f46; }
 .matrix td.failed { background: #fee2e2; color: #991b1b; }
 .matrix td.missing { background: #f3f4f6; color: #9ca3af; }
+.action-plan-section { margin-top: 20px; }
+.action-plan-header { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; margin-bottom: 12px; }
 </style>

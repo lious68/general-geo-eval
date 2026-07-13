@@ -38,6 +38,10 @@
           <el-icon><Link /></el-icon>
           <span>引用源情况</span>
         </el-menu-item>
+        <el-menu-item index="/action-plan">
+          <el-icon><List /></el-icon>
+          <span>行动计划</span>
+        </el-menu-item>
         <el-menu-item index="/questions">
           <el-icon><Document /></el-icon>
           <span>问题管理</span>

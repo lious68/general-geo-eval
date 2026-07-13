@@ -74,5 +74,15 @@ export function getCitationBreakdown(runId, params = {}) {
   if (params.task_id) q.append('task_id', params.task_id)
   if (params.model_key) q.append('model_key', params.model_key)
   const qs = q.toString() ? `?${q.toString()}` : ''
-  return apiFetch(`/api/results/${runId}/citation-breakdown${qs}`)
+  return apiFetch(`/results/${runId}/citation-breakdown${qs}`)
+}
+
+export function getActionPlan(runId, params = {}) {
+  // 行动计划诊断（纯只读）。run_id 模式传真实 run_id；task_id 模式 run_id 传 '0' 占位。
+  // apiFetch 会自动加 /api 前缀，这里只传 /results/...
+  const q = new URLSearchParams()
+  if (params.task_id) q.append('task_id', params.task_id)
+  if (params.model_key) q.append('model_key', params.model_key)
+  const qs = q.toString() ? `?${q.toString()}` : ''
+  return apiFetch(`/results/${runId}/action-plan${qs}`)
 }

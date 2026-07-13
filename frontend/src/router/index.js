@@ -12,6 +12,7 @@ const routes = [
   { path: '/metric-guide', name: 'MetricGuide', component: () => import('../views/MetricGuide.vue') },
   { path: '/history', name: 'History', component: () => import('../views/History.vue') },
   { path: '/citation-sources', name: 'CitationSources', component: () => import('../views/CitationSources.vue') },
+  { path: '/action-plan', name: 'ActionPlan', component: () => import('../views/ActionPlan.vue') },
   { path: '/settings', name: 'Settings', component: () => import('../views/Settings.vue') },
 ]
 

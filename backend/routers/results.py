@@ -56,15 +56,20 @@ def _classify_url_type(url: str) -> str:
         return "AI生成的引用"
 
 
-def _resolve_citation_channel(url_info: dict, default_channel: str = "pretraining") -> str:
-    """判定引用构成通道。优先取 citation_channel 字段；
-    其次 position < 0 → web_search（API 搜索返回）；
-    其余返回 default_channel（webchat 模式应传 "web_search"，api 模式传 "pretraining"）。"""
+def _resolve_citation_channel(url_info: dict) -> str:
+    """判定引用构成通道——基于引用自身属性（不依赖评测模式）：
+    - UCloud 官方链接 (citation_type=url, is_ucloud=true) → pretraining（模型预训练知识）
+    - 文本引用 (citation_type=reference，如"据UCloud官网…") → pretraining（模型预训练知识）
+    - 第三方 URL (citation_type=url, is_ucloud=false) → web_search（联网搜索获取）
+    - API 搜索引用 (position < 0) → web_search
+    - 无 citation_type 的 → undetected"""
     channel = url_info.get("citation_channel")
     if channel and channel in ("pretraining", "user_provided", "web_search", "undetected"):
         return channel
 
-    # position < 0：API 搜索引用，一定是 web_search
+    ct = url_info.get("citation_type", "")
+
+    # API 搜索引用（position < 0）→ web_search
     pos = url_info.get("position")
     if pos is not None:
         try:
@@ -73,11 +78,21 @@ def _resolve_citation_channel(url_info: dict, default_channel: str = "pretrainin
         except (TypeError, ValueError):
             pass
 
-    # 其余：按评测模式判定默认通道
-    return default_channel
+    # 文本引用（如"据UCloud官网…"）→ pretraining
+    if ct == "reference":
+        return "pretraining"
+
+    # URL 引用 → 按 is_ucloud 区分
+    if ct == "url":
+        if url_info.get("is_ucloud"):
+            return "pretraining"   # UCloud 官方链接
+        else:
+            return "web_search"    # 第三方来源链接
+
+    return "undetected"
 
 
-def _extract_cited_urls(r: dict, cache_map: dict = None, default_channel: str = "pretraining") -> list:
+def _extract_cited_urls(r: dict, cache_map: dict = None) -> list:
     """从一条 analysis_result 解析出供前端渲染的引用链接清单。
 
     all_cited_urls 在库里是 JSON 字符串（或已解析数组），取其中 citation_type=url
@@ -120,7 +135,7 @@ def _extract_cited_urls(r: dict, cache_map: dict = None, default_channel: str = 
             "source_channel": u.get("source_channel") or _resolve_domain_label(c),
             "mentions_uc": mu,  # True/False/None
             "position": u.get("position"),
-            "citation_channel": _resolve_citation_channel(u, default_channel),
+            "citation_channel": _resolve_citation_channel(u),
         })
     return out
 
@@ -479,23 +494,10 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
     """
     if task_id:
         all_results = await db.get_task_results(task_id, model_key)
-        # 判定评测模式
-        default_channel = "pretraining"
-        db_conn = await db.get_db()
-        try:
-            cursor = await db_conn.execute(
-                "SELECT mode FROM evaluation_runs WHERE task_id=? LIMIT 1", (task_id,)
-            )
-            row = await cursor.fetchone()
-            if row and row["mode"] == "webchat":
-                default_channel = "web_search"
-        finally:
-            await db_conn.close()
     else:
         run = await db.get_run(run_id)
         if not run:
             raise HTTPException(404, "评测不存在")
-        default_channel = "web_search" if run.get("mode") == "webchat" else "pretraining"
         all_results = await db.get_results(run_id, model_key)
 
     if not all_results:
@@ -597,7 +599,7 @@ async def get_question_drilldown(run_id: str, model_key: str, task_id: Optional[
             "has_citation": bool(db.has_effective_citation(r)),
             "response_summary": summary,
             "response_content": response_content,
-            "cited_urls": _extract_cited_urls(r, cache_map=_uc_cache_map, default_channel=default_channel),
+            "cited_urls": _extract_cited_urls(r, cache_map=_uc_cache_map),
             "has_error": has_error,
             "error_message": r.get("error_message") if has_error else None,
         })
@@ -782,37 +784,23 @@ async def compare_runs(run_id_1: str = Query(...), run_id_2: str = Query(...)):
 @router.get("/{run_id}/citation-breakdown")
 async def get_citation_breakdown(run_id: str, model_key: Optional[str] = None,
                                  task_id: Optional[str] = None):
-    """引用构成统计：按 citation_channel 四类（预训练/用户提供/网络搜索/未检测）计数。
+    """引用构成统计：按引用自身属性四类（预训练/用户提供/网络搜索/未检测）计数。
 
     只读端点，返回 {pretraining: N, user_provided: N, web_search: N, undetected: N, total: N}。
     task_id 模式：按大任务聚合该模型（或全部模型）的 analysis_results（跨批次去重），
     run_id 传 "0" 占位、不做 run 存在性校验。
 
-    分类规则：根据评测模式判定默认通道——
-    webchat（联网搜索）→ web_search，api（纯模型）→ pretraining。
-    已有 citation_channel 字段 / position < 0 的 API 搜索引用优先使用。
+    分类规则（_resolve_citation_channel）：
+    - UCloud 官方链接/文本引用 → pretraining（预训练知识）
+    - 第三方来源 URL → web_search（联网搜索）
+    - 用户提供的 URL → user_provided（暂无数据）
     """
-    # 判定评测模式 → 默认通道
-    default_channel = "pretraining"  # fallback
     if task_id:
         all_results = await db.get_task_results(task_id, model_key)
-        # 查该 task 下批次的评测模式
-        db_conn = await db.get_db()
-        try:
-            cursor = await db_conn.execute(
-                "SELECT mode FROM evaluation_runs WHERE task_id=? LIMIT 1", (task_id,)
-            )
-            row = await cursor.fetchone()
-            if row and row["mode"] == "webchat":
-                default_channel = "web_search"
-        finally:
-            await db_conn.close()
     else:
         run = await db.get_run(run_id)
         if not run:
             raise HTTPException(404, "评测不存在")
-        if run.get("mode") == "webchat":
-            default_channel = "web_search"
         all_results = await db.get_results(run_id, model_key)
 
     # 四类计数器
@@ -846,7 +834,7 @@ async def get_citation_breakdown(run_id: str, model_key: Optional[str] = None,
                 continue
             seen_urls.add(url_content)
 
-            channel = _resolve_citation_channel(url_info, default_channel)
+            channel = _resolve_citation_channel(url_info)
             counts[channel] += 1
 
         # 也统计 citations 字段中的引用
@@ -864,14 +852,14 @@ async def get_citation_breakdown(run_id: str, model_key: Optional[str] = None,
         for cit in cits_list:
             if not isinstance(cit, dict):
                 continue
-            if cit.get("citation_type") != "url":
-                continue
-            url_content = cit.get("content", "")
-            if not url_content or url_content in seen_urls:
-                continue
-            seen_urls.add(url_content)
-
-            channel = _resolve_citation_channel(cit, default_channel)
+            # URL 引用：去重后统计
+            if cit.get("citation_type") == "url":
+                url_content = cit.get("content", "")
+                if not url_content or url_content in seen_urls:
+                    continue
+                seen_urls.add(url_content)
+            # 文本引用（如"据UCloud官网…"）：无 URL，直接统计（pretraining）
+            channel = _resolve_citation_channel(cit)
             counts[channel] += 1
 
     total = sum(counts.values())

@@ -2,6 +2,39 @@
   <div class="task-list">
     <h2 class="page-title"><el-icon><Promotion /></el-icon> 执行评测（任务 → 批次 → 问题）</h2>
 
+    <!-- Win 评测机操作指引：放最上面，2 行可折叠，点了才看详情 -->
+    <el-alert class="win-guide" :type="winGuideOpen ? 'warning' : 'info'" :closable="false">
+      <div class="wg-bar" @click="winGuideOpen = !winGuideOpen">
+        <el-icon class="wg-ico"><Monitor /></el-icon>
+        <span class="wg-title">
+          添加批次后去 <b>Win 评测机</b>开跑：
+          RDP 登录 → 浏览器开 <code>http://localhost:8443</code> → 点[开始评测]
+          <span class="wg-more">{{ winGuideOpen ? '收起 ▲' : '详情 / 排查 ▼' }}</span>
+        </span>
+      </div>
+      <el-collapse-transition>
+        <div v-show="winGuideOpen" class="wg-detail">
+          <ol class="wg-steps">
+            <li><b>RDP 登录 Win 评测机</b>（用户 <code>Administrator</code>）。守护进程是「登录才跑」的任务计划，不登录不会启动。</li>
+            <li>守护进程一般登录后自动起。没起来时，管理员 PowerShell 手动启动：
+              <pre class="wg-cmd">Start-ScheduledTask WinDaemon</pre></li>
+            <li>RDP 里浏览器打开确认页（是 <b>8443</b>，不是 8444）：
+              <pre class="wg-cmd">http://localhost:8443</pre></li>
+            <li>页面看到待跑批次 + 各模型登录态，点 <b>[开始评测]</b>。
+              <span class="wg-note">未登录模型会先弹浏览器引导登录，登录态自动保存复用。</span></li>
+          </ol>
+          <p class="wg-sub"><b>状态看不懂 / 排查：</b></p>
+          <ul class="wg-steps">
+            <li>批次状态 <el-tag size="small" type="info">pushed</el-tag>/<el-tag size="small" type="warning">awaiting_human</el-tag> → 该去 Win 点[开始]了。</li>
+            <li>状态不动 / 确认页打不开 → 守护进程没起，回到第 2 步启动它。</li>
+            <li>看守护进程日志：<pre class="wg-cmd">Get-Content C:\general-geo-eval\output\win_daemon.log -Tail 50 -Wait</pre></li>
+            <li>调试模式前台跑（pythonw 吞报错时用，会占用当前窗口）：<pre class="wg-cmd">cd C:\general-geo-eval; & "C:\Program Files\Python311\python.exe" scripts\win_daemon.py</pre></li>
+            <li>停掉/重启守护进程：<pre class="wg-cmd">Stop-ScheduledTask WinDaemon; Start-ScheduledTask WinDaemon</pre></li>
+          </ul>
+        </div>
+      </el-collapse-transition>
+    </el-alert>
+
     <el-card>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <span style="font-weight:600">任务列表（点行首 ▸ 展开看批次 / 子任务）</span>
@@ -182,47 +215,6 @@
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
-
-    <!-- Win 评测机操作指引：久了不知道怎么开 Win 时看这里 -->
-    <el-card class="win-guide-card">
-      <template #header>
-        <div class="win-guide-head" @click="winGuideOpen = !winGuideOpen">
-          <span><el-icon><Monitor /></el-icon> Win 评测机操作指引（添加批次后去这里开跑）</span>
-          <el-icon class="win-guide-arrow" :class="{ open: winGuideOpen }"><ArrowDown /></el-icon>
-        </div>
-      </template>
-      <el-collapse-transition>
-        <div v-show="winGuideOpen" class="win-guide-body">
-          <p class="wg-line">添加批次后，配置会自动推送给 <b>Win 评测机</b>的守护进程。你要做的是在 Win 那边把它「开起来」并确认开跑：</p>
-          <ol class="wg-steps">
-            <li>
-              <b>RDP 登录 Win 评测机</b>（用户 <code>Administrator</code>）。守护进程是「登录才跑」的任务计划，不登录不会启动。
-            </li>
-            <li>
-              守护进程一般登录后自动起。没起来时，管理员 PowerShell 手动启动：
-              <pre class="wg-cmd">Start-ScheduledTask WinDaemon</pre>
-            </li>
-            <li>
-              RDP 里浏览器打开确认页（不是 8444，是 <b>8443</b>）：
-              <pre class="wg-cmd">http://localhost:8443</pre>
-            </li>
-            <li>
-              页面上看到待跑批次 + 各模型登录态，点 <b>[开始评测]</b>。
-              <span class="wg-note">未登录模型会先弹浏览器引导登录，登录态自动保存复用。</span>
-            </li>
-          </ol>
-          <el-divider />
-          <p class="wg-line"><b>状态看不懂 / 排查：</b></p>
-          <ul class="wg-steps">
-            <li>批次状态 <el-tag size="small" type="info">pushed</el-tag>/<el-tag size="small" type="warning">awaiting_human</el-tag> → 该去 Win 点[开始]了。</li>
-            <li>状态不动 / 确认页打不开 → 守护进程没起，回到第 2 步启动它。</li>
-            <li>看守护进程日志：<pre class="wg-cmd">Get-Content C:\\general-geo-eval\\output\\win_daemon.log -Tail 50 -Wait</pre></li>
-            <li>调试模式前台跑（pythonw 吞报错时用，会占用当前窗口）：<pre class="wg-cmd">cd C:\\general-geo-eval; & "C:\\Program Files\\Python311\\python.exe" scripts\\win_daemon.py</pre></li>
-            <li>停掉/重启守护进程：<pre class="wg-cmd">Stop-ScheduledTask WinDaemon; Start-ScheduledTask WinDaemon</pre></li>
-          </ul>
-        </div>
-      </el-collapse-transition>
     </el-card>
 
     <!-- 新建任务向导：只建任务（= GEO 计算的总集/范围），不再选品类 -->
@@ -688,16 +680,18 @@ onBeforeUnmount(() => { stopPolling(); if (unsubBrand) unsubBrand() })
 .go-win-hint { font-size: 11px; color: #d97706; margin-top: 3px; line-height: 1.4; }
 .go-win-hint code { background: #fff3e0; padding: 0 4px; border-radius: 3px; font-size: 11px; color: #b45309; }
 
-/* Win 操作指引卡片 */
-.win-guide-card { margin-top: 16px; }
-.win-guide-head { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
-.win-guide-head span { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
-.win-guide-arrow { transition: transform .2s ease; color: #999; }
-.win-guide-arrow.open { transform: rotate(180deg); }
-.win-guide-body { font-size: 13.5px; color: #333; line-height: 1.7; }
-.win-guide-body .wg-line { margin: 6px 0; }
+/* Win 操作指引 alert：置顶 2 行可折叠 */
+.win-guide { margin-bottom: 16px; cursor: pointer; }
+.win-guide :deep(.el-alert__content) { width: 100%; }
+.wg-bar { display: flex; align-items: flex-start; gap: 6px; }
+.wg-ico { font-size: 16px; margin-top: 1px; flex-shrink: 0; }
+.wg-title { font-size: 13.5px; line-height: 1.55; flex: 1; }
+.wg-title code { background: rgba(0,0,0,.06); padding: 0 4px; border-radius: 3px; font-size: 12.5px; }
+.wg-more { margin-left: 8px; color: var(--el-color-primary); font-size: 12px; white-space: nowrap; }
+.wg-detail { margin-top: 10px; cursor: default; border-top: 1px dashed var(--el-border-color); padding-top: 8px; }
+.wg-detail .wg-sub { font-size: 13px; margin: 10px 0 4px; }
 .wg-steps { margin: 6px 0 6px 20px; padding: 0; }
-.wg-steps li { margin: 8px 0; }
+.wg-steps li { margin: 8px 0; font-size: 13px; line-height: 1.6; }
 .wg-note { color: #d97706; font-size: 12px; margin-left: 4px; }
 .wg-cmd { background: #f6f8fa; border: 1px solid #ebeef5; border-radius: 4px; padding: 6px 10px; margin: 4px 0; font-family: Consolas, monospace; font-size: 12.5px; color: #24292f; white-space: pre-wrap; word-break: break-all; }
 .import-logs-box { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ebeef5; }

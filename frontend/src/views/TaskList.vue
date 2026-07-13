@@ -7,13 +7,14 @@
       <div class="wg-bar" @click="winGuideOpen = !winGuideOpen">
         <el-icon class="wg-ico"><Monitor /></el-icon>
         <span class="wg-title">
-          添加批次后去 <b>Win 评测机</b>开跑：
-          RDP 登录 → 浏览器开 <code>http://localhost:8443</code> → 点[开始评测]
+          <span class="wg-lead">添加批次后去 Win 评测机开跑：</span>
+          <span class="wg-path">RDP 登录 → 浏览器开 <code>http://localhost:8443</code> → 点[开始评测]</span>
           <span class="wg-more">{{ winGuideOpen ? '收起 ▲' : '详情 / 排查 ▼' }}</span>
         </span>
       </div>
       <el-collapse-transition>
         <div v-show="winGuideOpen" class="wg-detail">
+          <p class="wg-intro">添加批次后，配置会自动推送给 Win 评测机的守护进程。你要做的是在 Win 那边把它「开起来」并确认开跑：</p>
           <ol class="wg-steps">
             <li><b>RDP 登录 Win 评测机</b>（用户 <code>Administrator</code>）。守护进程是「登录才跑」的任务计划，不登录不会启动。</li>
             <li>守护进程一般登录后自动起。没起来时，管理员 PowerShell 手动启动：
@@ -683,17 +684,22 @@ onBeforeUnmount(() => { stopPolling(); if (unsubBrand) unsubBrand() })
 /* Win 操作指引 alert：置顶 2 行可折叠 */
 .win-guide { margin-bottom: 16px; cursor: pointer; }
 .win-guide :deep(.el-alert__content) { width: 100%; }
-.wg-bar { display: flex; align-items: flex-start; gap: 6px; }
-.wg-ico { font-size: 16px; margin-top: 1px; flex-shrink: 0; }
-.wg-title { font-size: 13.5px; line-height: 1.55; flex: 1; }
-.wg-title code { background: rgba(0,0,0,.06); padding: 0 4px; border-radius: 3px; font-size: 12.5px; }
-.wg-more { margin-left: 8px; color: var(--el-color-primary); font-size: 12px; white-space: nowrap; }
-.wg-detail { margin-top: 10px; cursor: default; border-top: 1px dashed var(--el-border-color); padding-top: 8px; }
-.wg-detail .wg-sub { font-size: 13px; margin: 10px 0 4px; }
-.wg-steps { margin: 6px 0 6px 20px; padding: 0; }
-.wg-steps li { margin: 8px 0; font-size: 13px; line-height: 1.6; }
-.wg-note { color: #d97706; font-size: 12px; margin-left: 4px; }
-.wg-cmd { background: #f6f8fa; border: 1px solid #ebeef5; border-radius: 4px; padding: 6px 10px; margin: 4px 0; font-family: Consolas, monospace; font-size: 12.5px; color: #24292f; white-space: pre-wrap; word-break: break-all; }
+.wg-bar { display: flex; align-items: flex-start; gap: 8px; }
+.wg-ico { font-size: 18px; margin-top: 2px; flex-shrink: 0; }
+.wg-title { flex: 1; }
+/* 第一行：引导句 + 关键路径。加大字号、主色调，显眼 */
+.wg-lead { font-size: 15px; font-weight: 700; color: var(--el-color-primary); }
+.wg-path { display: block; font-size: 15px; font-weight: 600; color: var(--el-color-primary); line-height: 1.6; margin-top: 2px; }
+.wg-path code { background: rgba(64,158,255,.12); padding: 1px 6px; border-radius: 4px; font-size: 14px; color: var(--el-color-primary); }
+.wg-more { display: inline-block; margin-top: 6px; color: var(--el-color-primary); font-size: 13px; white-space: nowrap; opacity: .8; }
+/* 详情区：字号回到正常阅读尺寸，颜色偏深，便于细看 */
+.wg-detail { margin-top: 12px; cursor: default; border-top: 1px dashed var(--el-border-color); padding-top: 10px; }
+.wg-detail .wg-intro { font-size: 14px; color: #444; line-height: 1.7; margin-bottom: 8px; }
+.wg-detail .wg-sub { font-size: 14px; color: #333; margin: 12px 0 6px; }
+.wg-steps { margin: 6px 0 6px 22px; padding: 0; }
+.wg-steps li { margin: 9px 0; font-size: 14px; line-height: 1.7; color: #333; }
+.wg-note { color: #d97706; font-size: 13px; margin-left: 4px; }
+.wg-cmd { background: #f6f8fa; border: 1px solid #ebeef5; border-radius: 4px; padding: 7px 11px; margin: 5px 0; font-family: Consolas, "Courier New", monospace; font-size: 13px; color: #24292f; white-space: pre-wrap; word-break: break-all; }
 .import-logs-box { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ebeef5; }
 .import-logs-head { font-size: 13px; color: #555; font-weight: 600; margin-bottom: 8px; }
 .import-log-list { display: flex; flex-direction: column; gap: 6px; }

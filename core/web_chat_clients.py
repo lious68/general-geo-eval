@@ -1892,8 +1892,37 @@ class DoubaoWebChatClient(WebChatClientBase):
             except Exception:
                 pass
 
-            # 2) 点「新对话」按钮（JS 定位 span 文本==新对话 的可点祖先）
-            clicked = {"ok": False}
+            # 2) 硬 goto /chat 重新加载——清掉粘性指针后，/chat 不再被重定向回旧会话
+            #    （确保页面在 doubao.com 上，绝非 about:blank）
+            try:
+                await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                logger.warning(f"WebChat doubao: goto /chat 失败 (attempt={attempt}): {e}")
+
+            # 3) 等输入框就绪
+            try:
+                await page.locator(self.INPUT_SELECTOR).first.wait_for(state="visible", timeout=15000)
+            except Exception:
+                await asyncio.sleep(3)
+
+            # 4) 校验：URL 必须在 doubao.com 上（拒绝 about:blank/空页），
+            #    且无 /chat/<session> 残留、message-list 为空
+            try:
+                st = await page.evaluate("""() => {
+                  const ml = document.querySelector('[class*="message-list"]');
+                  const cnt = ml ? ml.querySelectorAll('[class*="message-row"], [class*="v_list_row"], [class*="chat-message"]').length : 0;
+                  return { url: location.href, msg_count: cnt };
+                }""")
+                on_doubao = "doubao.com" in st["url"]
+                is_session = "/chat/" in st["url"] and st["url"].rstrip("/").split("/chat/")[-1] != ""
+                if on_doubao and not is_session and (not st["msg_count"] or st["msg_count"] == 0):
+                    logger.info(f"WebChat doubao: 新会话就绪 (attempt={attempt} url={st['url']} msgs={st['msg_count']})")
+                    return
+                logger.warning(f"WebChat doubao: 会话未就绪 (attempt={attempt} url={st['url']} msgs={st['msg_count']})，重试")
+            except Exception:
+                pass
+
+            # 5) 兜底：点「新对话」按钮（仅作 fallback，不再用 Ctrl+Shift+K——它会开空标签页）
             try:
                 clicked = await page.evaluate("""() => {
                   const all = Array.from(document.querySelectorAll('span, div, button, a, [role="button"]'));
@@ -1917,45 +1946,12 @@ class DoubaoWebChatClient(WebChatClientBase):
                   }
                   return { ok: false };
                 }""")
-            except Exception as e:
-                logger.warning(f"WebChat doubao: 点新对话按钮异常: {e}")
-            if not clicked.get("ok"):
-                # 兜底：Ctrl+Shift+K 快捷键开新对话
-                try:
-                    await page.keyboard.press("Control+Shift+K")
-                    logger.info("WebChat doubao: 按钮未点中，用 Ctrl+Shift+K 兜底")
-                except Exception:
-                    pass
-            await asyncio.sleep(2.0)
-
-            # 3) 等输入框就绪
-            try:
-                await page.locator(self.INPUT_SELECTOR).first.wait_for(state="visible", timeout=15000)
-            except Exception:
-                await asyncio.sleep(3)
-
-            # 4) 校验：URL=/chat（无 session id）且 message-list 为空
-            try:
-                st = await page.evaluate("""() => {
-                  const ml = document.querySelector('[class*="message-list"]');
-                  const cnt = ml ? ml.querySelectorAll('[class*="message-row"], [class*="v_list_row"], [class*="chat-message"]').length : 0;
-                  return { url: location.href, msg_count: cnt };
-                }""")
-                is_session = "/chat/" in st["url"] and st["url"].rstrip("/").split("/chat/")[-1] != ""
-                if not is_session and (not st["msg_count"] or st["msg_count"] == 0):
-                    logger.info(f"WebChat doubao: 新会话就绪 (attempt={attempt} url={st['url']} msgs={st['msg_count']})")
-                    return
-                logger.warning(f"WebChat doubao: 仍有残留会话 (attempt={attempt} url={st['url']} msgs={st['msg_count']})，重试")
+                if clicked.get("ok"):
+                    await asyncio.sleep(2.0)
             except Exception:
                 pass
 
-            # 重试前硬 goto /chat 兜底（撕 SPA 状态）+ 再清一次 storage
-            try:
-                await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
-            except Exception:
-                pass
-
-        logger.warning("WebChat doubao: 3 次重试后仍可能残留会话，警惕串题")
+        logger.warning("WebChat doubao: 3 次重试后会话仍未就绪，警惕串题/空页")
 
 
 

@@ -31,6 +31,11 @@ cases = [
     ("本体+旗舰", "UCloud星图平台不错", True),
     ("仅UCloudStack(aliases)", "UCloudStack混合云", True),
     ("仅快杰型(产品,无本体)", "快杰型云主机性能强", False),  # 产品词单独出现不算(避免歧义)
+    # 第二类误判：品牌词只在 URL/引用链接里，正文 prose 无
+    ("仅URL含ucloud(prose无)", "[7] www.ucloud.cn: https://www.ucloud.cn 参考", False),
+    ("仅docs域名URL(prose无)", "详见 https://docs.ucloud.cn/gpu 文档", False),
+    ("prose有UCloud+URL也有", "推荐UCloud海外云主机，官网 www.ucloud.cn", True),
+    ("仅688158在URL(prose无)", "股票代码见 https://xueqiu.com/S/688158", False),
 ]
 
 failed = 0

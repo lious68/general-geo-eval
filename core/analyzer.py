@@ -197,20 +197,27 @@ class ResponseAnalyzer:
     def _detect_brand_mentions(self, content: str, result: AnalysisResult):
         """检测UCloud品牌提及。
 
-        口径：本体词(primary+aliases，如 UCloud/优刻得/688158/UCloudStack)始终算提及；
-        弱信号词(products/flagship，如 全球加速/OpenClaw/EIP/CloudWatch)仅当回答已含
-        本体词时才计入——否则单独出现的弱词/泛词会误判为提及（实测 q035/q036 qwen
-        命中「全球加速」「OpenClaw」侧栏噪声但未提优刻得）。与 url_uc_cache 排除
-        歧义词（星图/快杰/中立云）同源思想。
+        口径：
+        1. 本体词(primary+aliases，如 UCloud/优刻得/688158/UCloudStack)始终算提及；
+           弱信号词(products/flagship，如 全球加速/OpenClaw/EIP/CloudWatch)仅当回答
+           已含本体词时才计入——否则单独出现的弱词/泛词会误判（q035/q036 qwen 命中
+           「全球加速」「OpenClaw」侧栏噪声但未提优刻得）。与 url_uc_cache 排除歧义词
+           同源思想。
+        2. 先遮蔽 URL/裸域名 token（www.ucloud.cn / https://docs.ucloud.cn 等），
+           品牌词出现在引用 URL 里不算 prose 提及（q029 qwen 仅在参考链接
+           [7] www.ucloud.cn: https://www.ucloud.cn 出现 UCloud，正文未提）。
+           用等长空格替换保留位置偏移，context 仍从原文提取。
         """
-        # 预扫本体词：决定弱信号词是否生效
+        masked = self._mask_url_tokens(content)
+
+        # 预扫本体词：决定弱信号词是否生效（在遮蔽后的文本上判）
         body_kws = self.brand_keywords.get("primary", []) + self.brand_keywords.get("aliases", [])
         has_body = False
         for keyword in body_kws:
             if not keyword:
                 continue
             pattern = re.compile(re.escape(keyword), re.IGNORECASE if keyword.isascii() else 0)
-            if pattern.search(content):
+            if pattern.search(masked):
                 has_body = True
                 break
 
@@ -225,9 +232,9 @@ class ResponseAnalyzer:
                 else:
                     pattern = re.compile(re.escape(keyword))
 
-                for match in pattern.finditer(content):
+                for match in pattern.finditer(masked):
                     pos = match.start()
-                    # 提取上下文
+                    # 提取上下文（从原文，便于人读）
                     context_start = max(0, pos - 50)
                     context_end = min(len(content), match.end() + 50)
                     context = content[context_start:context_end]
@@ -253,6 +260,18 @@ class ResponseAnalyzer:
         result.ucloud_mention_count = len(result.ucloud_mentions)
         if result.ucloud_mentions:
             result.ucloud_first_position = result.ucloud_mentions[0].position
+
+    # URL / 裸域名 token 正则：遮蔽后品牌词在 URL 里不被提及检测命中
+    _URL_TOKEN_RE = re.compile(
+        r'https?://[^\s<>"\'\])\]，。、；：！？】}]+'
+        r'|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\.(?:cn|com|net|org|io|cc|me|info|biz|co|tv|ai)\b',
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _mask_url_tokens(cls, content: str) -> str:
+        """用等长空格替换 URL/裸域名，保留字符偏移。"""
+        return cls._URL_TOKEN_RE.sub(lambda m: ' ' * (m.end() - m.start()), content)
 
     def _detect_competitor_mentions(self, content: str, result: AnalysisResult):
         """检测竞品提及"""

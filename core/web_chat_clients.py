@@ -1846,15 +1846,19 @@ class DoubaoWebChatClient(WebChatClientBase):
             return []
 
     async def _start_new_chat(self, page: Page):
-        """开新对话：硬导航 /chat 整页重载，彻底清掉 SPA 内存里的当前会话指针。
+        """开新对话：清粘性 storage + 点真·「新对话」按钮 + 校验无残留会话 + 重试。
 
-        证据（diag_doubao_newchat3/4）：点 logo、点「新对话」按钮都只改路由、
-        不重置 SPA 状态——发送下一题时 SPA 仍持有旧会话 id，回到旧会话
-        （newchat3: q011 后 URL 弹回 /chat/38432792893519106），或竞态下
-        干脆不渲染（newchat4: q011 仅 393 字、msg_count 仍 0）。硬 goto 整页
-        重载会撕掉 JS 上下文重建，/chat 无 session id 即干净新会话。
+        旧实现用 page.goto(/chat) 硬导航，但豆包把 /chat 重定向回上次会话
+        /chat/<id>（粘性指针存于 localStorage __tea_cache_refer_*），导致同一窗口
+        连问、后题携带前题上下文（0729 实测 q011-q040 全串题，回答以"结合你的
+        场景：游戏出海/俄罗斯/东南亚"开头，引用的是前面题累积的上下文）。
+
+        修复（基于 diag_doubao_newchat4 调查）：
+        1) 清 localStorage/sessionStorage 里 __tea_cache_refer_* / __tea_cache_first_* 粘性键
+        2) 点侧栏「新对话」按钮（JS 定位 span 文本==新对话 的可点祖先；兜底 Ctrl+Shift+K）
+        3) 校验 URL=/chat（无 session id）且 message-list 为空；不满足则重试，最多 3 次
         """
-        # 关掉首屏可能弹出的遮罩（登录引导/dialog），避免拦截后续交互
+        # 关首屏遮罩
         try:
             for sel in [
                 "[role='dialog'] [class*='close']",
@@ -1871,35 +1875,87 @@ class DoubaoWebChatClient(WebChatClientBase):
         except Exception:
             pass
 
-        # 1) 硬导航 /chat（整页重载，非客户端路由）—— 撕掉 SPA 旧会话状态
-        try:
-            await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
-            logger.info("WebChat doubao: 已硬导航 /chat 开新对话")
-        except Exception as e:
-            logger.warning(f"WebChat doubao: goto /chat 失败: {e}")
+        for attempt in range(3):
+            # 1) 清粘性 storage（存上次会话 refer 的键，/chat 据它重定向回旧会话）
+            try:
+                await page.evaluate("""() => {
+                  const clear = (store) => {
+                    const keys = [];
+                    for (let i = 0; i < store.length; i++) keys.push(store.key(i));
+                    for (const k of keys) {
+                      if (/__tea_cache_(refer|first)/i.test(k)) { try { store.removeItem(k); } catch(e){} }
+                    }
+                  };
+                  try { clear(localStorage); } catch(e){}
+                  try { clear(sessionStorage); } catch(e){}
+                }""")
+            except Exception:
+                pass
 
-        # 2) 等输入框就绪（SPA 重建完成）
-        try:
-            await page.locator(self.INPUT_SELECTOR).first.wait_for(state="visible", timeout=15000)
-        except Exception:
-            await asyncio.sleep(3)
+            # 2) 点「新对话」按钮（JS 定位 span 文本==新对话 的可点祖先）
+            clicked = {"ok": False}
+            try:
+                clicked = await page.evaluate("""() => {
+                  const all = Array.from(document.querySelectorAll('span, div, button, a, [role="button"]'));
+                  for (const el of all) {
+                    const ownText = Array.from(el.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join('');
+                    const t = (el.textContent || '').trim();
+                    if (!(ownText === '新对话' || t === '新对话' || (t.includes('新对话') && t.length < 12))) continue;
+                    let click = el;
+                    for (let i = 0; i < 5 && click; i++) {
+                      const tag = click.tagName.toLowerCase();
+                      const role = click.getAttribute('role') || '';
+                      const cls = (typeof click.className === 'string') ? click.className : '';
+                      if (tag === 'button' || tag === 'a' || role === 'button' || /sidebar_nav_item|nav[-_]item/i.test(cls)) break;
+                      click = click.parentElement;
+                    }
+                    const target = click || el;
+                    const r = target.getBoundingClientRect();
+                    if (!r.width || !r.height) continue;
+                    target.click();
+                    return { ok: true };
+                  }
+                  return { ok: false };
+                }""")
+            except Exception as e:
+                logger.warning(f"WebChat doubao: 点新对话按钮异常: {e}")
+            if not clicked.get("ok"):
+                # 兜底：Ctrl+Shift+K 快捷键开新对话
+                try:
+                    await page.keyboard.press("Control+Shift+K")
+                    logger.info("WebChat doubao: 按钮未点中，用 Ctrl+Shift+K 兜底")
+                except Exception:
+                    pass
+            await asyncio.sleep(2.0)
 
-        # 3) 校验：URL 应为 /chat（无 session id）且 message-list 为空。
-        #    若 doubao 把 /chat 重定向回旧会话（/chat/<id> 或有残留消息），
-        #    说明硬重载也无法隔离——记录 warning，后续 extractor 兜底处理。
-        try:
-            st = await page.evaluate("""() => {
-              const ml = document.querySelector('[class*="message-list"]');
-              const cnt = ml ? ml.querySelectorAll('[class*="message-row"], [class*="v_list_row"], [class*="chat-message"]').length : 0;
-              return { url: location.href, msg_count: cnt };
-            }""")
-            is_session_url = "/chat/" in st["url"] and st["url"].rstrip("/").split("/chat/")[-1] != ""
-            if is_session_url or (st["msg_count"] and st["msg_count"] > 0):
-                logger.warning(f"WebChat doubao: 硬重载后仍非空会话(url={st['url']}, msgs={st['msg_count']})")
-            else:
-                logger.info(f"WebChat doubao: 新会话就绪(url={st['url']}, msgs={st['msg_count']})")
-        except Exception:
-            pass
+            # 3) 等输入框就绪
+            try:
+                await page.locator(self.INPUT_SELECTOR).first.wait_for(state="visible", timeout=15000)
+            except Exception:
+                await asyncio.sleep(3)
+
+            # 4) 校验：URL=/chat（无 session id）且 message-list 为空
+            try:
+                st = await page.evaluate("""() => {
+                  const ml = document.querySelector('[class*="message-list"]');
+                  const cnt = ml ? ml.querySelectorAll('[class*="message-row"], [class*="v_list_row"], [class*="chat-message"]').length : 0;
+                  return { url: location.href, msg_count: cnt };
+                }""")
+                is_session = "/chat/" in st["url"] and st["url"].rstrip("/").split("/chat/")[-1] != ""
+                if not is_session and (not st["msg_count"] or st["msg_count"] == 0):
+                    logger.info(f"WebChat doubao: 新会话就绪 (attempt={attempt} url={st['url']} msgs={st['msg_count']})")
+                    return
+                logger.warning(f"WebChat doubao: 仍有残留会话 (attempt={attempt} url={st['url']} msgs={st['msg_count']})，重试")
+            except Exception:
+                pass
+
+            # 重试前硬 goto /chat 兜底（撕 SPA 状态）+ 再清一次 storage
+            try:
+                await page.goto("https://www.doubao.com/chat", wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+
+        logger.warning("WebChat doubao: 3 次重试后仍可能残留会话，警惕串题")
 
 
 

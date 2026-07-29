@@ -195,8 +195,29 @@ class ResponseAnalyzer:
         return result
 
     def _detect_brand_mentions(self, content: str, result: AnalysisResult):
-        """检测UCloud品牌提及"""
+        """检测UCloud品牌提及。
+
+        口径：本体词(primary+aliases，如 UCloud/优刻得/688158/UCloudStack)始终算提及；
+        弱信号词(products/flagship，如 全球加速/OpenClaw/EIP/CloudWatch)仅当回答已含
+        本体词时才计入——否则单独出现的弱词/泛词会误判为提及（实测 q035/q036 qwen
+        命中「全球加速」「OpenClaw」侧栏噪声但未提优刻得）。与 url_uc_cache 排除
+        歧义词（星图/快杰/中立云）同源思想。
+        """
+        # 预扫本体词：决定弱信号词是否生效
+        body_kws = self.brand_keywords.get("primary", []) + self.brand_keywords.get("aliases", [])
+        has_body = False
+        for keyword in body_kws:
+            if not keyword:
+                continue
+            pattern = re.compile(re.escape(keyword), re.IGNORECASE if keyword.isascii() else 0)
+            if pattern.search(content):
+                has_body = True
+                break
+
         for mention_type, keywords in self.brand_keywords.items():
+            # 无本体上下文时，弱信号词(products/flagship)不计入，避免泛词/噪声误判
+            if mention_type in ("products", "flagship") and not has_body:
+                continue
             for keyword in keywords:
                 # 大小写不敏感搜索（对于英文关键词）
                 if keyword.isascii():

@@ -177,6 +177,10 @@
                     <el-button v-if="isAdmin()" size="small" link type="warning" @click="repushBatchRow(b)">
                       重推
                     </el-button>
+                    <el-button v-if="isAdmin()" size="small" link type="danger" :loading="deletingBatchId === b.batch_id"
+                               @click="deleteBatchRow(b)">
+                      删除
+                    </el-button>
                   </template>
                 </el-table-column>
               </el-table>
@@ -262,7 +266,7 @@ import { apiFetch, isAdmin } from '../composables/useWebSocket'
 import { useCurrentBrand, onBrandChanged } from '../composables/useCurrentBrand'
 const { currentBrand } = useCurrentBrand()
 let unsubBrand = null
-import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores, repushBatch } from '../api/tasks'
+import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores, repushBatch, deleteBatch } from '../api/tasks'
 import { renderMarkdown } from '../composables/useMarkdown'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
@@ -458,6 +462,28 @@ async function repushBatchRow(b) {
     startPolling(taskId)
   } catch (e) {
     ElMessage.error(`重推失败: ${e.message || e}`)
+  }
+}
+
+const deletingBatchId = ref('')
+async function deleteBatchRow(b) {
+  const taskId = b.task_id
+  const batchId = b.batch_id
+  if (!taskId || !batchId) return ElMessage.error('批次信息缺失')
+  try {
+    await ElMessageBox.confirm(
+      `确认删除批次 ${batchId}？\n该批次的结果/单元状态/导入日志将一并清除，任务评分重算。删除后可重新建子任务再跑。`,
+      '删除批次', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+  } catch (e) { return }
+  deletingBatchId.value = batchId
+  try {
+    const res = await deleteBatch(taskId, batchId)
+    ElMessage.success(res.message || '批次已删除')
+    await refreshBatches(taskId)
+  } catch (e) {
+    ElMessage.error(`删除失败: ${e.message || e}`)
+  } finally {
+    deletingBatchId.value = ''
   }
 }
 

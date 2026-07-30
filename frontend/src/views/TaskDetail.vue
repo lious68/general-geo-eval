@@ -62,6 +62,12 @@
           </template>
         </el-table-column>
         <el-table-column prop="id" label="run_id" min-width="200" />
+        <el-table-column v-if="isAdmin()" label="操作" width="100" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" type="danger" plain :loading="deletingId === row.batch_id"
+                       @click="onDeleteBatch(row)">删除</el-button>
+          </template>
+        </el-table-column>
       </el-table>
 
       <!-- 本任务行动计划（基于自然题动态生成） -->
@@ -101,9 +107,9 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { isAdmin } from '../composables/useWebSocket'
-import { getTask, importResults } from '../api/tasks'
+import { getTask, importResults, deleteBatch } from '../api/tasks'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 import ActionPlanPanel from '../components/ActionPlanPanel.vue'
 
@@ -115,6 +121,25 @@ const importDialog = ref(false)
 const file = ref(null)
 const importing = ref(false)
 const batchDialog = ref(false)
+const deletingId = ref('')
+
+async function onDeleteBatch(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除批次 ${row.batch_id}？\n该批次的结果/单元状态/导入日志将一并清除，任务评分会重算。\n删除后可重新创建子任务再跑。`,
+      '删除批次', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+  } catch (e) { return }
+  deletingId.value = row.batch_id
+  try {
+    const res = await deleteBatch(route.params.taskId, row.batch_id)
+    ElMessage.success(res.message || '批次已删除')
+    await load(true)
+  } catch (e) {
+    ElMessage.error(e.message || '删除失败')
+  } finally {
+    deletingId.value = ''
+  }
+}
 
 async function load(silent = false) {
   if (!silent) loading.value = true

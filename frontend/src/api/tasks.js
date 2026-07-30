@@ -51,6 +51,10 @@ export function getBatchImportLogs(taskId, batchId) {
   return apiFetch(`/tasks/${taskId}/batches/${batchId}/import-logs`)
 }
 
+export function deleteBatch(taskId, batchId) {
+  return apiFetch(`/tasks/${taskId}/batches/${batchId}`, { method: 'DELETE' })
+}
+
 export function getTaskScores(taskId, category = null) {
   const q = category ? `?category=${encodeURIComponent(category)}` : ''
   return apiFetch(`/tasks/${taskId}/scores${q}`)

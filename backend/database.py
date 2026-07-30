@@ -1502,6 +1502,42 @@ async def delete_task(task_id: str):
         await db.close()
 
 
+async def delete_task_batch(task_id: str, batch_id: str) -> bool:
+    """删除 task 下的一个批次（evaluation_runs 行）+ 其 results/task_units/导入日志。
+
+    不删 task 本身，也不删其他批次。geo_scores 是 task 级聚合（不按 batch 分），
+    由调用方（task_service.delete_batch）事后重算。
+    返回是否真的删到了行。
+    """
+    db = await get_db()
+    try:
+        # 先收该批次的 run_id（evaluation_runs.id），用于清 task_units
+        cur = await db.execute(
+            "SELECT id FROM evaluation_runs WHERE task_id=? AND batch_id=?",
+            (task_id, batch_id))
+        run_ids = [r["id"] for r in await cur.fetchall()]
+        if not run_ids:
+            return False
+        # 删该批次的结果（按 task_id+batch_id 精确，避免误伤同 task 其他批次）
+        await db.execute(
+            "DELETE FROM analysis_results WHERE task_id=? AND batch_id=?",
+            (task_id, batch_id))
+        # 旧导入可能没写 batch_id 到 analysis_results（按 run_id 兜底再清一次）
+        for rid in run_ids:
+            await db.execute("DELETE FROM analysis_results WHERE run_id=?", (rid,))
+            await db.execute("DELETE FROM task_units WHERE run_id=?", (rid,))
+        await db.execute(
+            "DELETE FROM batch_import_logs WHERE task_id=? AND batch_id=?",
+            (task_id, batch_id))
+        await db.execute(
+            "DELETE FROM evaluation_runs WHERE id IN (%s)" % ",".join("?" * len(run_ids)),
+            run_ids)
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
 async def add_task_batch(run_id: str, task_id: str, batch_id: str, name: str,
                          model_keys: List[str], question_ids: List[str],
                          per_model: Dict[str, List[str]], config: Optional[Dict] = None) -> Dict:

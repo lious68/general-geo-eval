@@ -43,6 +43,20 @@ async def delete_task(task_id: str, user=Depends(require_admin)):
     return {"success": True}
 
 
+@router.delete("/{task_id}/batches/{batch_id}")
+async def delete_batch(task_id: str, batch_id: str, user=Depends(require_admin)):
+    """删除 task 下的一个批次（其结果/单元状态/导入日志/批次行），并重算 task 评分。
+
+    用于丢弃脏批次（如 doubao about:blank 废数据）后重建子任务。不删 task 本身。
+    """
+    if not await db.get_task(task_id):
+        raise HTTPException(404, "任务不存在")
+    deleted = await task_service.delete_batch(task_id, batch_id)
+    if not deleted:
+        raise HTTPException(404, "批次不存在")
+    return {"success": True, "message": f"批次 {batch_id} 已删除，任务评分已重算"}
+
+
 @router.post("/{task_id}/recalculate")
 async def recalculate_task(task_id: str, user=Depends(require_admin)):
     """重算单个 task 的 GEO 评分（按当前 analysis_results 覆盖 geo_scores）。

@@ -280,6 +280,17 @@ async def get_batch_import_logs(task_id: str, batch_id: str) -> List[Dict]:
     return await db.get_batch_import_logs(task_id, batch_id)
 
 
+async def delete_batch(task_id: str, batch_id: str) -> bool:
+    """删除 task 下的一个批次（其 results/task_units/导入日志/evaluation_runs 行），
+    并重算该 task 的 geo_scores（results 已变）。不删 task 本身。"""
+    if not await db.get_task(task_id):
+        raise ValueError("任务不存在")
+    deleted = await db.delete_task_batch(task_id, batch_id)
+    # 无论是否删到行，都重算一次（保证 scores 与现存 results 一致）
+    await recalculate_task_scores(task_id)
+    return deleted
+
+
 async def recalculate_task_scores(task_id: str) -> None:
     """按当前 task 全部 analysis_results 重算 geo_scores 并覆盖。"""
     task = await db.get_task(task_id)

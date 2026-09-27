@@ -18,6 +18,7 @@
         </el-select>
       </div>
       <el-menu :default-active="currentRoute" router class="sidebar-menu">
+        <el-menu-item index="/crowd"><el-icon><Monitor /></el-icon><span>众包测评</span></el-menu-item>
         <el-menu-item index="/">
           <el-icon><Aim /></el-icon>
           <span>品牌管理</span>

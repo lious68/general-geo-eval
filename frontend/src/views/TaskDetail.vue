@@ -16,6 +16,7 @@
         <el-button v-if="isAdmin()" type="primary" plain @click="batchDialog=true">
           <el-icon><Plus /></el-icon> 添加批次
         </el-button>
+        <el-button v-if="isAdmin()" type="warning" @click="$router.push({path:'/crowd',query:{task_id:route.params.taskId}})">创建 / 管理众包采集</el-button>
         <el-button v-if="isAdmin()" type="success" @click="importDialog=true">
           <el-icon><Upload /></el-icon> 导入结果
         </el-button>
@@ -24,6 +25,7 @@
         </el-button>
       </div>
 
+      <p>众包样本验收通过后计入覆盖率和 GEO 评分；同平台同题只计一格。</p>
       <!-- 覆盖率矩阵 -->
       <div style="overflow:auto">
         <table class="matrix">
@@ -47,7 +49,7 @@
       </div>
 
       <!-- 批次列表 -->
-      <h4 style="margin-top:20px">下载批次</h4>
+      <h4 style="margin-top:20px">采集批次（含众包）</h4>
       <el-table :data="detail.batches" size="small">
         <el-table-column prop="batch_id" label="批次ID" min-width="200" />
         <el-table-column label="模型">

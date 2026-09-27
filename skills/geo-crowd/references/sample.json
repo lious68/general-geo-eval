@@ -1,0 +1,12 @@
+{
+  "assignment_id": "从当前分配复制",
+  "prompt": "原样复制分配的问题",
+  "platform": "原样复制项目平台",
+  "answer": "页面完整回答原文",
+  "answer_complete": true,
+  "citations_state": "complete",
+  "citations": [{"title": "页面可见文章标题", "url": "https://example.com/article", "kind": "citation", "marker": "1"}],
+  "conditions": {"model": "页面显示的模型或 unknown", "web_search": "on/off/unknown", "new_conversation": true, "collected_at": "ISO 8601 时间", "language": "zh-CN"},
+  "evidence": {"page_text": "包含问题、回答和引用区域的页面原文", "completeness_notes": []},
+  "screenshot_paths": ["替换为真实截图文件路径/answer-1.png"]
+}

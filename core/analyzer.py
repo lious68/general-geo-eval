@@ -207,6 +207,10 @@ class ResponseAnalyzer:
            品牌词出现在引用 URL 里不算 prose 提及（q029 qwen 仅在参考链接
            [7] www.ucloud.cn: https://www.ucloud.cn 出现 UCloud，正文未提）。
            用等长空格替换保留位置偏移，context 仍从原文提取。
+        3. 但若正文完全没有品牌词、只给出官方网址（主机名是官方域名或其子域），
+           整条回答仍记为提及（计 1 次，位置取该网址）——模型把用户引向官网本身就是
+           品牌露出。相似域名（ykucloud.com 等）不算。这种仅网址的提及不计排名、
+           不计推荐、情感取中性 0.5、位置权重 0（2026-09-27 用户口径）。
         """
         masked = self._mask_url_tokens(content)
 
@@ -256,6 +260,22 @@ class ResponseAnalyzer:
                 unique_mentions.append(m)
         result.ucloud_mentions = sorted(unique_mentions, key=lambda x: x.position)
 
+        # 3. 正文没写品牌名、但给出了被测品牌官方网址（如 www.ucloud.cn / docs.ucloud.cn）
+        #    时也算提及（2026-09-27 口径）：按网址主机名精确匹配官方域名或其子域，
+        #    ykucloud.com / cosmos-ucloud.com.cn / bestgpucloud.com 等仿冒/相似域名不算。
+        #    只在没有文字提及时补一条，文字提及的计数与位置保持原样。
+        if not result.ucloud_mentions:
+            for match in self._URL_TOKEN_RE.finditer(content):
+                if self._is_official_host(match.group(0)):
+                    pos = match.start()
+                    result.ucloud_mentions.append(BrandMention(
+                        keyword=match.group(0),
+                        position=pos,
+                        context=content[max(0, pos - 50): min(len(content), match.end() + 50)],
+                        mention_type="official_url",
+                    ))
+                    break
+
         result.ucloud_mentioned = len(result.ucloud_mentions) > 0
         result.ucloud_mention_count = len(result.ucloud_mentions)
         if result.ucloud_mentions:
@@ -272,6 +292,16 @@ class ResponseAnalyzer:
     def _mask_url_tokens(cls, content: str) -> str:
         """用等长空格替换 URL/裸域名，保留字符偏移。"""
         return cls._URL_TOKEN_RE.sub(lambda m: ' ' * (m.end() - m.start()), content)
+
+    def _is_official_host(self, token: str) -> bool:
+        """URL/裸域名的主机名是否为被测品牌官方域名本身或其子域（不做子串匹配）。"""
+        from urllib.parse import urlparse
+        url = token if "://" in token else "http://" + token
+        try:
+            host = (urlparse(url).hostname or "").lower().rstrip(".")
+        except ValueError:
+            return False
+        return any(d and (host == d or host.endswith("." + d)) for d in self.official_domains)
 
     def _detect_competitor_mentions(self, content: str, result: AnalysisResult):
         """检测竞品提及"""
@@ -374,10 +404,15 @@ class ResponseAnalyzer:
         result.has_citation = has_effective_citation(result)
         result.citation_count = len(result.citations)
 
+    @staticmethod
+    def _url_only(result: AnalysisResult) -> bool:
+        """仅凭官方网址记为提及（正文无品牌词）。此时不算排名/推荐，情感取中性。"""
+        return bool(result.ucloud_mentions) and all(m.mention_type == "official_url" for m in result.ucloud_mentions)
+
     def _detect_recommendations(self, content: str, result: AnalysisResult):
         """检测推荐信息"""
-        # 检测UCloud是否被推荐
-        if not result.ucloud_mentioned:
+        # 检测UCloud是否被推荐；只出现官方网址不算推荐
+        if not result.ucloud_mentioned or self._url_only(result):
             result.ucloud_recommended = False
             result.ucloud_recommendation_strength = "none"
             return
@@ -436,7 +471,7 @@ class ResponseAnalyzer:
 
     def _analyze_sentiment(self, content: str, result: AnalysisResult):
         """情感分析"""
-        if not result.ucloud_mentioned:
+        if not result.ucloud_mentioned or self._url_only(result):
             result.sentiment_score = 0.5
             result.sentiment_label = "neutral"
             return
@@ -519,7 +554,7 @@ class ResponseAnalyzer:
 
     def _calculate_position_weight(self, content: str, result: AnalysisResult):
         """计算位置权重"""
-        if not result.ucloud_mentions:
+        if not result.ucloud_mentions or self._url_only(result):
             result.position_weight = 0.0
             return
 
@@ -545,7 +580,7 @@ class ResponseAnalyzer:
 
     def _calculate_rank(self, content: str, result: AnalysisResult):
         """计算UCloud在推荐列表中的排名"""
-        if not result.ucloud_mentioned:
+        if not result.ucloud_mentioned or self._url_only(result):
             result.ucloud_rank = None
             return
 

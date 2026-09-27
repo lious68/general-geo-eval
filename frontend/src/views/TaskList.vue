@@ -260,7 +260,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiFetch, isAdmin } from '../composables/useWebSocket'
 import { useCurrentBrand, onBrandChanged } from '../composables/useCurrentBrand'
@@ -271,6 +271,7 @@ import { renderMarkdown } from '../composables/useMarkdown'
 import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const router = useRouter()
+const route = useRoute()
 const tasks = ref([])
 const loading = ref(false)
 const wizard = ref(false)
@@ -650,6 +651,8 @@ async function onRecalcAll() {
 
 onMounted(async () => {
   await load()
+  // 从 众包评测「＋ 新建采集项目」跳来：直接打开执行评测的新建任务
+  if (route.query.create) { router.replace({ query: { ...route.query, create: undefined } }); openWizard() }
   unsubBrand = onBrandChanged(() => load())
 })
 onBeforeUnmount(() => { stopPolling(); if (unsubBrand) unsubBrand() })

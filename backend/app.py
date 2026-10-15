@@ -18,26 +18,8 @@ from database import init_db, verify_session
 from routers import evaluations, results, questions, settings, auth, tasks, brands, crowd
 
 
-# 需要鉴权的路径前缀
-PROTECTED_PREFIXES = [
-    "/api/settings",
-    "/api/evaluations",
-    "/api/questions",
-    "/api/tasks",
-]
-# 不需要鉴权的路径
-PUBLIC_PATHS = [
-    "/api/auth/login",
-    "/api/auth/check",
-    "/api/health",
-    "/api/results",
-    "/api/questions/categories",
-    "/api/questions/types",
-    "/api/evaluations/ws/",     # WebSocket 连接：token 通过 query param 或初始消息验证
-    "/docs",
-    "/openapi.json",
-    "/redoc",
-]
+# Default deny for business APIs; gateway verifies its own service credential.
+PUBLIC_PATHS = {"/api/auth/login", "/api/auth/check", "/api/health"}
 
 
 @asynccontextmanager
@@ -59,8 +41,8 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["https://117.50.195.148", "https://zhun.ai"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -76,14 +58,7 @@ async def auth_middleware(request: Request, call_next):
     if not path.startswith("/api/"):
         return await call_next(request)
 
-    # 公开接口放行
-    for pub in PUBLIC_PATHS:
-        if path.startswith(pub):
-            return await call_next(request)
-
-    # 检查是否需要鉴权
-    needs_auth = any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES)
-    if not needs_auth:
+    if path in PUBLIC_PATHS or path.startswith("/api/crowd/gateway/"):
         return await call_next(request)
 
     # 验证 token

@@ -1,3 +1,5 @@
+from fastapi import Depends
+from routers.auth import require_admin
 """结果查询路由"""
 import json
 from urllib.parse import urlparse
@@ -779,7 +781,7 @@ async def get_citation_drilldown(run_id: str, source_channel: str = Query(...),
 
 
 @router.post("/{run_id}/backfill-citations")
-async def backfill_citations(run_id: str):
+async def backfill_citations(run_id: str, user=Depends(require_admin)):
     """从 raw_content 重新提取引用详情并回填 citations/all_cited_urls 列"""
     run = await db.get_run(run_id)
     if not run:
@@ -791,7 +793,7 @@ async def backfill_citations(run_id: str):
 
 @router.post("/{run_id}/backfill-url-uc")
 async def backfill_url_uc(run_id: str, task_id: Optional[str] = None,
-                          concurrency: int = 8):
+                          concurrency: int = Query(8, ge=1, le=8), user=Depends(require_admin)):
     """对指定 run/task 范围内的引用 URL 抓取并回填「出现 UCloud」缓存。
 
     抓取每个 URL 网页正文是否含 UCloud/优刻得，结果存 url_uc_cache 表（跨 task 复用）。

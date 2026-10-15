@@ -75,7 +75,9 @@ def test_create_requires_task():
     from routers import auth
     geo_app.app.dependency_overrides[auth.get_current_user] = lambda: {'role': 'admin', 'username': 'a'}
     try:
-        r = TestClient(geo_app.app).post('/api/crowd/admin/projects', json=dict(title='t', platform='kimi', entry_url='https://www.kimi.com/zh', questions=['q']))
+        from unittest.mock import patch, AsyncMock
+        with patch('app.verify_session', AsyncMock(return_value={'role':'admin','username':'a'})):
+            r = TestClient(geo_app.app).post('/api/crowd/admin/projects', headers={'Authorization':'Bearer test'}, json=dict(title='t', platform='kimi', entry_url='https://www.kimi.com/zh', questions=['q']))
         assert r.status_code == 400 and '大任务' in r.json()['detail']
     finally:
         geo_app.app.dependency_overrides.clear()

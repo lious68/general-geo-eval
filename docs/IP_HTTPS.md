@@ -1,6 +1,6 @@
 
 ## 2026-10-15 IP HTTPS 已启用
-- 入口 https://117.50.195.148/；HTTP 页面308到HTTPS；为兼容已安装客户端，HTTP /api/ 暂保留反代，ACME路径保持HTTP可用。不要部署旧nginx模板覆盖SSL。
+- 入口 https://117.50.195.148/；HTTP页面及API均308到HTTPS；客户端必须使用HTTPS，ACME路径保持HTTP可用。不要部署旧nginx模板覆盖SSL。
 - Let's Encrypt IP SAN证书，Certbot5.8独立venv /opt/geo-certbot；证书 /etc/letsencrypt/live/geo-ip/{fullchain.pem,privkey.pem}，私钥与ACME账号只在服务器，不提交Git。
 - 首证 notAfter=2026-10-21 22:23:08 UTC；IP短期证书须自动续期。
 - systemd geo-certbot-renew.timer enabled，每日00/06/12/18点+随机0–15分钟，Persistent=true；service运行 /opt/geo-certbot/bin/certbot renew --quiet --no-random-sleep-on-renew。
@@ -13,3 +13,5 @@
 
 ### 仓库中的配置副本
 `deploy/ip-https/` 保存线上 Nginx、systemd service/timer 和续期 deploy hook，不包含证书、私钥或 ACME 账号。先签发证书，再安装配置并执行 `sudo nginx -t`、`sudo systemctl daemon-reload`、`sudo systemctl enable --now geo-certbot-renew.timer`。证书尚未签发时不要直接启用该 Nginx 配置。服务器已完成安装，无需重复申请。
+
+安全更新：geo-service-security.conf 安装到 /etc/systemd/system/geo-eval.service.d/security.conf，后端仅监听127.0.0.1；准活SSH隧道保持可用。登录限流5次/分钟、突发5次；WebSocket访问日志关闭以免记录query令牌。

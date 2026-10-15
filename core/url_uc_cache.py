@@ -84,41 +84,14 @@ async def fetch_url_mentions_uc(url: str) -> Optional[bool]:
         False = 抓到了但没出现
         None  = 抓取失败（超时/反爬/非HTML/网络错）
     """
-    if httpx is None:
-        return None
-    # 官方域名短路
+    from safe_url_fetch import fetch_html
     if is_uc_official_url(url):
         return True
-
-    last_err = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            async with httpx.AsyncClient(
-                timeout=_FETCH_TIMEOUT,
-                follow_redirects=True,
-                headers=_HEADERS,
-                verify=False,
-            ) as client:
-                resp = await client.get(url)
-                if resp.status_code != 200:
-                    last_err = f"http {resp.status_code}"
-                    continue
-                ctype = resp.headers.get("content-type", "")
-                if "html" not in ctype.lower():
-                    # 非 HTML（PDF/图片/json 等）—— 不抓正文，判 None
-                    return None
-                # 编码：优先 resp.encoding，回退 utf-8（中文站常见）
-                try:
-                    text = resp.content.decode(resp.encoding or "utf-8", errors="replace")
-                except (LookupError, TypeError):
-                    text = resp.content.decode("utf-8", errors="replace")
-                body = _text_from_html(text)
-                return bool(UC_KEYWORDS.search(body))
-        except (httpx.TimeoutException, httpx.HTTPError, Exception) as e:
-            last_err = type(e).__name__
-            continue
-    # 全部重试失败
-    return None
+    try:
+        html = await asyncio.to_thread(fetch_html, url)
+        return bool(UC_KEYWORDS.search(_text_from_html(html))) if html is not None else None
+    except Exception:
+        return None
 
 
 # ── DB 缓存读写（延迟 import database，避免 core 依赖 backend） ──
@@ -186,7 +159,7 @@ async def backfill_urls(urls, concurrency: int = _MAX_CONCURRENCY,
     """
     # 去重
     uniq = list(dict.fromkeys(urls))
-    sem = asyncio.Semaphore(concurrency)
+    sem = asyncio.Semaphore(max(1, min(int(concurrency), 8)))
     stats = {"total": len(uniq), "ok": 0, "true": 0, "false": 0,
              "failed": 0, "reused": 0}
     done = 0

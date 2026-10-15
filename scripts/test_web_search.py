@@ -7,7 +7,7 @@ from openai import OpenAI
 TEST_QUESTION_NO_SEARCH = "请用一句话介绍UCloud优刻得"
 TEST_QUESTION_SEARCH = "UCloud 2026年最新动态"
 
-API_KEY = "6TDiy0eXKczEAlcDA100C6A2-9298-4670-aB17-7248231d"
+API_KEY = __import__("os").environ["MODELVERSE_API_KEY"]
 BASE_URL = "https://api.modelverse.cn/v1"
 
 MODELS = [

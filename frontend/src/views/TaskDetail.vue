@@ -13,9 +13,6 @@
           <div style="font-size:12px;color:#999;margin-bottom:4px">覆盖率</div>
           <el-progress :percentage="Math.round(detail.summary.coverage_rate*100)" />
         </div>
-        <el-button v-if="isAdmin()" type="primary" plain @click="batchDialog=true">
-          <el-icon><Plus /></el-icon> 添加批次
-        </el-button>
         <el-button v-if="isAdmin()" type="warning" @click="$router.push({path:'/crowd',query:{task_id:route.params.taskId}})">创建 / 管理众包采集</el-button>
         <el-button v-if="isAdmin()" type="success" @click="importDialog=true">
           <el-icon><Upload /></el-icon> 导入结果
@@ -87,9 +84,9 @@
     </el-card>
 
     <!-- 导入对话框 -->
-    <el-dialog v-model="importDialog" title="导入本地 runner 结果" width="480px">
+    <el-dialog v-model="importDialog" title="导入历史结果" width="480px">
       <el-upload drag :auto-upload="false" :on-change="onFile" accept=".json" :limit="1">
-        <div style="padding:20px"><p style="color:#999">拖入 local_webchat_runner 产出的 .json</p></div>
+        <div style="padding:20px"><p style="color:#999">选择符合历史结果格式的 JSON 文件</p></div>
       </el-upload>
       <div v-if="file" style="margin-top:12px">{{ file.name }}</div>
       <template #footer>
@@ -97,22 +94,15 @@
       </template>
     </el-dialog>
 
-    <!-- 添加批次（下载配置）对话框 -->
-    <BatchDownloadDialog v-model:visible="batchDialog"
-      :task-id="route.params.taskId"
-      :task-name="detail.task.name"
-      :total-qids="detail.task.question_ids"
-      @downloaded="onBatchCreated" />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { isAdmin } from '../composables/useWebSocket'
 import { getTask, importResults, deleteBatch } from '../api/tasks'
-import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 import ActionPlanPanel from '../components/ActionPlanPanel.vue'
 
 const route = useRoute()
@@ -122,13 +112,12 @@ const loading = ref(false)
 const importDialog = ref(false)
 const file = ref(null)
 const importing = ref(false)
-const batchDialog = ref(false)
 const deletingId = ref('')
 
 async function onDeleteBatch(row) {
   try {
     await ElMessageBox.confirm(
-      `确认删除批次 ${row.batch_id}？\n该批次的结果/单元状态/导入日志将一并清除，任务评分会重算。\n删除后可重新创建子任务再跑。`,
+      `确认删除批次 ${row.batch_id}？\n该批次的结果/单元状态/导入日志将一并清除，任务评分会重算。\n删除后可通过众包项目补采。`,
       '删除批次', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
   } catch (e) { return }
   deletingId.value = row.batch_id
@@ -152,27 +141,6 @@ async function load(silent = false) {
   } finally { if (!silent) loading.value = false }
 }
 
-// 批次状态轮询：有活跃批次（推送/等待/运行/回传中）时每 8s 静默刷新，
-// 状态自动跟进 pushed→awaiting_human→running→imported，无需人工刷新。
-const ACTIVE_BATCH_STATUSES = ['pushed', 'awaiting_human', 'running', 'importing']
-const POLL_INTERVAL = 8000
-let pollTimer = null
-function startPolling() {
-  stopPolling()
-  pollTimer = setInterval(async () => {
-    const bs = (detail.value && detail.value.batches) || []
-    const active = bs.some(b => ACTIVE_BATCH_STATUSES.includes(b.status))
-    if (active) {
-      await load(true)
-    } else {
-      stopPolling()
-    }
-  }, POLL_INTERVAL)
-}
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-}
-
 function cellClass(s) {
   return { done: s === 'done', failed: s === 'failed', missing: !s || s === 'missing' }
 }
@@ -194,12 +162,6 @@ function viewResult() {
   router.push({ path: '/dashboard', query: { task_id: route.params.taskId } })
 }
 
-// 批次创建后启动轮询（静默刷新状态）
-async function onBatchCreated() {
-  await load()
-  startPolling()
-}
-
 function batchTagType(status) {
   const map = {
     completed: 'success', imported: 'success',
@@ -210,13 +172,7 @@ function batchTagType(status) {
   return map[status] || 'info'
 }
 
-onMounted(async () => {
-  await load()
-  // 进入页面时若有活跃批次，直接开始轮询
-  const bs = (detail.value && detail.value.batches) || []
-  if (bs.some(b => ACTIVE_BATCH_STATUSES.includes(b.status))) startPolling()
-})
-onBeforeUnmount(() => { stopPolling() })
+onMounted(load)
 </script>
 
 <style scoped>

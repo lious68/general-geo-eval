@@ -77,7 +77,9 @@ async def start_evaluation(
     mode: str = "api",
     enable_search: bool = False,
 ) -> str:
-    """启动异步评测任务"""
+    """启动 API 评测；WebChat 采集已迁移到众包。"""
+    if mode != "api":
+        raise ValueError("服务端 WebChat 爬虫已停用，请在众包评测中创建采集项目")
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
 
     # 获取问题列表
@@ -215,15 +217,10 @@ async def _run_evaluation(
         elif ws_manager and etype in ("model_skipped", "throttled"):
             logger.info(f"[EVAL {run_id}] {etype}: {event}")
 
-    # ---- 客户端工厂（webchat / api 各一）----
-    async def client_factory_webchat(mk):
-        from web_chat_clients import create_web_chat_client
-        return create_web_chat_client(mk)
-
     async def client_factory_api(mk):
         return await _create_model_client(mk, temperature)
 
-    client_factory = client_factory_webchat if mode == "webchat" else client_factory_api
+    client_factory = client_factory_api
 
     # ---- 逐模型策略：用户 delay 与平台保护 delay 取较大者，绝不缩小 DeepSeek 间隔 ----
     extra_policy: Dict[str, dict] = {}
@@ -244,7 +241,7 @@ async def _run_evaluation(
     )
 
     try:
-        # 运行调度（webchat 浏览器由各 worker 在 client_factory 内初始化/关闭）
+        # 运行 API 调度
         await scheduler.run()
 
         # 补齐被跳过（未配置/登录失效）的模型单元为空结果，保证评测覆盖完整
@@ -252,8 +249,7 @@ async def _run_evaluation(
             seen = {r["question_id"] for r in all_results[mk]}
             for q in questions:
                 if q["id"] not in seen:
-                    reason = ("WebChat 未配置登录状态" if mode == "webchat"
-                              else "API key not configured / skipped")
+                    reason = "API key not configured / skipped"
                     rd = _empty_result(q["id"], mk, reason)
                     await save_analysis_result(run_id, rd)
                     all_results[mk].append(rd)
@@ -313,7 +309,7 @@ async def _run_evaluation(
             })
 
     finally:
-        # 浏览器由各 worker 在 client_factory→scheduler 内自行关闭；
+        # API 客户端由调度器管理；
         # 这里仅兜底记录。
         logger.info(f"[EVAL {run_id}] finished, completed={completed}/{total}")
 

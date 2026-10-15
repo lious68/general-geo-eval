@@ -1,40 +1,5 @@
 <template>
   <div class="task-list">
-    <h2 class="page-title"><el-icon><Promotion /></el-icon> 执行评测（任务 → 批次 → 问题）</h2>
-
-    <!-- Win 评测机操作指引：放最上面，2 行可折叠，点了才看详情 -->
-    <el-alert class="win-guide" :type="winGuideOpen ? 'warning' : 'info'" :closable="false">
-      <div class="wg-bar" @click="winGuideOpen = !winGuideOpen">
-        <el-icon class="wg-ico"><Monitor /></el-icon>
-        <span class="wg-title">
-          <span class="wg-lead">添加批次后去 Win 评测机开跑：</span>
-          <span class="wg-path">RDP 登录 → 浏览器开 <code>http://localhost:8443</code> → 点[开始评测]</span>
-          <span class="wg-more">{{ winGuideOpen ? '收起 ▲' : '详情 / 排查 ▼' }}</span>
-        </span>
-      </div>
-      <el-collapse-transition>
-        <div v-show="winGuideOpen" class="wg-detail">
-          <p class="wg-intro">添加批次后，配置会自动推送给 Win 评测机的守护进程。你要做的是在 Win 那边把它「开起来」并确认开跑：</p>
-          <ol class="wg-steps">
-            <li><b>RDP 登录 Win 评测机</b>（用户 <code>Administrator</code>）。守护进程是「登录才跑」的任务计划，不登录不会启动。</li>
-            <li>守护进程一般登录后自动起。没起来时，管理员 PowerShell 手动启动：
-              <pre class="wg-cmd">Start-ScheduledTask WinDaemon</pre></li>
-            <li>RDP 里浏览器打开确认页（是 <b>8443</b>，不是 8444）：
-              <pre class="wg-cmd">http://localhost:8443</pre></li>
-            <li>页面看到待跑批次 + 各模型登录态，点 <b>[开始评测]</b>。
-              <span class="wg-note">未登录模型会先弹浏览器引导登录，登录态自动保存复用。</span></li>
-          </ol>
-          <p class="wg-sub"><b>状态看不懂 / 排查：</b></p>
-          <ul class="wg-steps">
-            <li>批次状态 <el-tag size="small" type="info">pushed</el-tag>/<el-tag size="small" type="warning">awaiting_human</el-tag> → 该去 Win 点[开始]了。</li>
-            <li>状态不动 / 确认页打不开 → 守护进程没起，回到第 2 步启动它。</li>
-            <li>看守护进程日志：<pre class="wg-cmd">Get-Content C:\general-geo-eval\output\win_daemon.log -Tail 50 -Wait</pre></li>
-            <li>调试模式前台跑（pythonw 吞报错时用，会占用当前窗口）：<pre class="wg-cmd">cd C:\general-geo-eval; & "C:\Program Files\Python311\python.exe" scripts\win_daemon.py</pre></li>
-            <li>停掉/重启守护进程：<pre class="wg-cmd">Stop-ScheduledTask WinDaemon; Start-ScheduledTask WinDaemon</pre></li>
-          </ul>
-        </div>
-      </el-collapse-transition>
-    </el-alert>
 
     <el-card>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -49,9 +14,7 @@
         </div>
       </div>
       <el-alert type="info" :closable="false" style="margin-bottom:12px">
-        一个任务 = 固定总题集。展开任务行即可看到其下<b>批次（子任务）</b>，每个批次 = 一个模型+题区间的下载配置。
-        可反复「添加批次」：<b>先 ds、再豆包 1-12、再豆包 13-40、再 kimi、再文心</b>……每批独立下载、本机运行、导入，
-        服务器按 (任务,模型,问题) 自动合并，并以任务内全部模型×问题为分母重算 GEO。慢慢补，不必一次全跑。
+        先创建评测大任务并固定题目，再到众包采集选择平台、发布任务。验收通过的样本自动计入覆盖率与评分；历史批次仍可查看。
       </el-alert>
 
       <el-table :data="tasks" v-loading="loading" stripe row-key="id" @expand-change="onExpand">
@@ -64,9 +27,7 @@
                   评测批次（子任务）· 共 {{ (batchesOf(row.id) || []).length }} 个批次
                 </span>
                 <div>
-                  <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">
-                    <el-icon><Plus /></el-icon> 添加批次
-                  </el-button>
+
                 </div>
               </div>
 
@@ -161,9 +122,7 @@
                 <el-table-column label="状态" width="200">
                   <template #default="{ row: b }">
                     <el-tag size="small" :type="batchTagType(b.status)">{{ b.status || '-' }}</el-tag>
-                    <div v-if="['pushed','awaiting_human'].includes(b.status)" class="go-win-hint">
-                      → 去 Win RDP 浏览器开 <code>localhost:8443</code> 点[开始]
-                    </div>
+
                   </template>
                 </el-table-column>
                 <el-table-column label="操作" width="200" fixed="right">
@@ -171,12 +130,8 @@
                     <el-button v-if="isAdmin()" size="small" link type="success" @click="openImport(b)">
                       <el-icon><Upload /></el-icon> 导入
                     </el-button>
-                    <el-button size="small" link type="primary" @click="downloadBatchConfig(b)">
-                      <el-icon><Download /></el-icon> 配置
-                    </el-button>
-                    <el-button v-if="isAdmin()" size="small" link type="warning" @click="repushBatchRow(b)">
-                      重推
-                    </el-button>
+
+
                     <el-button v-if="isAdmin()" size="small" link type="danger" :loading="deletingBatchId === b.batch_id"
                                @click="deleteBatchRow(b)">
                       删除
@@ -186,7 +141,7 @@
               </el-table>
 
               <div v-if="!expandLoading[row.id] && !(batchesOf(row.id) || []).length" class="empty-tip">
-                暂无批次，点「添加批次」下载第一个配置
+                暂无采集结果，请通过众包采集创建子项目
               </div>
             </div>
           </template>
@@ -196,11 +151,22 @@
         <el-table-column label="模型">
           <template #default="{ row }">
             <el-tag v-for="m in row.models" :key="m" size="small" style="margin:2px">{{ m }}</el-tag>
-            <span v-if="!(row.models || []).length" style="color:#bbb;font-size:12px">尚未添加批次</span>
+            <span v-if="!(row.models || []).length" style="color:#bbb;font-size:12px">尚无采集记录</span>
           </template>
         </el-table-column>
         <el-table-column label="总题数" width="80">
           <template #default="{ row }">{{ (row.question_ids || []).length }}</template>
+        </el-table-column>
+        <el-table-column prop="geo_score" label="综合分数" width="145" sortable>
+          <template #default="{ row }">
+            <el-tooltip v-if="row.geo_score != null" content="与查看结果一致：各平台的品牌覆盖×45% + 引用×25% + 推荐×20% + 情感×10%，取平均并换算为百分制。未完成采集时为阶段分。" placement="top">
+              <div>
+                <strong style="font-size:22px;color:#337ecc">{{ Number(row.geo_score).toFixed(1) }}</strong><span style="font-size:12px;color:#909399"> / 100</span>
+                <div style="font-size:12px;color:#909399">{{ row.coverage_rate < 1 ? '阶段分' : '综合得分' }} · {{ row.scored_models }} 个平台</div>
+              </div>
+            </el-tooltip>
+            <span v-else style="font-size:12px;color:#909399">暂无评分</span>
+          </template>
         </el-table-column>
         <el-table-column label="覆盖率" width="170">
           <template #default="{ row }">
@@ -211,11 +177,11 @@
         </el-table-column>
         <el-table-column label="操作" width="320">
           <template #default="{ row }">
-            <el-button size="small" @click="$router.push(`/tasks/${row.id}`)">详情</el-button>
+            <el-button size="small" @click="$router.push(`/tasks/${row.id}`)">详情</el-button><el-button v-if="isAdmin()" size="small" type="warning" @click="$router.push({path:'/crowd',query:{task_id:row.id}})">众包采集</el-button>
             <el-button v-if="row.coverage_rate > 0" size="small" type="primary" @click="viewResult(row)">
               <el-icon><DataAnalysis /></el-icon> 查看结果
             </el-button>
-            <el-button v-if="isAdmin()" size="small" type="primary" plain @click="openBatch(row)">添加批次</el-button>
+
             <el-button v-if="isAdmin()" size="small" type="danger" plain @click="onDel(row)">删</el-button>
           </template>
         </el-table-column>
@@ -231,7 +197,7 @@
       </el-form>
       <el-alert type="info" :closable="false" style="margin-top:4px">
         任务 = <b>GEO 计算的总集/范围</b>（默认全部题）。这一步<b>只建任务</b>，
-        建好后回列表展开该任务，点「添加批次」再建子任务（模型 × 品类 × 题号区间）。
+        建好后点击“众包采集”，选择平台与题目并发布。
       </el-alert>
       <template #footer>
         <el-button @click="wizard=false">取消</el-button>
@@ -239,15 +205,12 @@
       </template>
     </el-dialog>
 
-    <!-- 下载配置（添加批次）对话框 -->
-    <BatchDownloadDialog v-model:visible="batchDialog"
-      :task-id="batchTaskId" :task-name="batchTaskName" :total-qids="batchTotalQids"
-      @downloaded="onBatchDownloaded" />
+
 
     <!-- 导入结果对话框（批次级） -->
     <el-dialog v-model="importDialog" :title="`导入结果到批次「${importBatch ? importBatch.batch_id : ''}」`" width="480px">
       <el-upload drag :auto-upload="false" :on-change="onFile" accept=".json" :limit="1">
-        <div style="padding:20px"><p style="color:#999">拖入该批次对应 local_webchat_runner 产出的 .json</p></div>
+        <div style="padding:20px"><p style="color:#999">选择该历史批次的兼容 JSON 结果文件</p></div>
       </el-upload>
       <div v-if="importFile" style="margin-top:12px">{{ importFile.name }}</div>
       <template #footer>
@@ -266,9 +229,8 @@ import { apiFetch, isAdmin } from '../composables/useWebSocket'
 import { useCurrentBrand, onBrandChanged } from '../composables/useCurrentBrand'
 const { currentBrand } = useCurrentBrand()
 let unsubBrand = null
-import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores, repushBatch, deleteBatch } from '../api/tasks'
+import { listTasks, createTask, deleteTask, getTask, importBatchResults, getBatchResults, getBatchImportLogs, recalculateAllTaskScores, deleteBatch } from '../api/tasks'
 import { renderMarkdown } from '../composables/useMarkdown'
-import BatchDownloadDialog from '../components/BatchDownloadDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -278,17 +240,12 @@ const wizard = ref(false)
 const form = ref({ name: 'GEO评估' })
 const creating = ref(false)
 const recalculating = ref(false)
-const winGuideOpen = ref(false)   // Win 操作指引卡片，默认收起（久不用时才展开看）
 
 // 批次（子任务）懒加载
 const batchesMap = ref({})
 const expandLoading = ref({})
 
-// 添加批次对话框
-const batchDialog = ref(false)
-const batchTaskId = ref('')
-const batchTaskName = ref('')
-const batchTotalQids = ref([])
+
 
 // 导入结果（批次级）
 const importDialog = ref(false)
@@ -339,18 +296,15 @@ function batchesOf(id) { return batchesMap.value[id] }
 async function onExpand(row, expandedRows) {
   const opened = expandedRows.some(r => r.id === row.id)
   if (!opened) {
-    if (pollTaskId === row.id) stopPolling()
     return
   }
   if (batchesMap.value[row.id]) {
-    startPolling(row.id)
     return
   }
   expandLoading.value = { ...expandLoading.value, [row.id]: true }
   try {
     const res = await getTask(row.id)
     if (res?.success) batchesMap.value[row.id] = res.data.batches || []
-    startPolling(row.id)
   } catch (e) {
     ElMessage.error(`加载批次失败: ${e.message || e}`)
   } finally {
@@ -415,57 +369,6 @@ async function loadBatchResults(b) {
   }
 }
 
-function openBatch(row) {
-  batchTaskId.value = row.id
-  batchTaskName.value = row.name
-  batchTotalQids.value = row.question_ids || []
-  batchDialog.value = true
-}
-
-async function onBatchDownloaded() {
-  await load()
-  if (batchTaskId.value) {
-    await refreshBatches(batchTaskId.value)
-    // 创建批次后自动启动轮询：状态 pushed→awaiting_human→running→imported
-    // 会自动流转刷新，用户无需手动刷新。
-    startPolling(batchTaskId.value)
-  }
-}
-
-async function downloadBatchConfig(b) {
-  const taskId = b.task_id
-  const batchId = b.batch_id
-  if (!taskId || !batchId) return ElMessage.error('批次信息缺失')
-  try {
-    const res = await apiFetch(`/tasks/${taskId}/batches/${batchId}/config`)
-    if (!res?.success) return ElMessage.error(res?.detail || '获取配置失败')
-    const cfg = res.data
-    const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `task_${cfg.task_name || taskId}_${batchId}.json`
-    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
-    ElMessage.success('配置已下载，可用 local_webchat_runner.py --config 该文件 重跑')
-  } catch (e) {
-    ElMessage.error(`下载失败: ${e.message || e}`)
-  }
-}
-
-async function repushBatchRow(b) {
-  const taskId = b.task_id
-  const batchId = b.batch_id
-  if (!taskId || !batchId) return ElMessage.error('批次信息缺失')
-  try {
-    const res = await repushBatch(taskId, batchId)
-    ElMessage.success(res?.message || '已重推')
-    await refreshBatches(taskId)
-    startPolling(taskId)
-  } catch (e) {
-    ElMessage.error(`重推失败: ${e.message || e}`)
-  }
-}
-
 const deletingBatchId = ref('')
 async function deleteBatchRow(b) {
   const taskId = b.task_id
@@ -486,29 +389,6 @@ async function deleteBatchRow(b) {
   } finally {
     deletingBatchId.value = ''
   }
-}
-
-// 展开某任务时，若有批次在推送/等待/运行/回传中，轮询刷新状态
-let pollTimer = null
-let pollTaskId = null
-const ACTIVE_BATCH_STATUSES = ['pushed', 'awaiting_human', 'running', 'importing']
-const POLL_INTERVAL = 8000  // 8s：状态自动跟进，无需人工刷新
-function startPolling(taskId) {
-  stopPolling()
-  pollTaskId = taskId
-  pollTimer = setInterval(async () => {
-    const bs = batchesMap.value[taskId] || []
-    const active = bs.some(b => ACTIVE_BATCH_STATUSES.includes(b.status))
-    if (active) {
-      await refreshBatches(taskId)
-    } else {
-      stopPolling()
-    }
-  }, POLL_INTERVAL)
-}
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-  pollTaskId = null
 }
 
 function openImport(b) {
@@ -613,7 +493,7 @@ async function createTaskStep() {
     const res = await createTask({ name: form.value.name })
     if (!res?.success) return ElMessage.error(res?.detail || '建任务失败')
     const task = res.data
-    ElMessage.success(`任务已创建（总题集 ${task.question_ids.length} 题）。展开该任务，点「添加批次」创建子任务（模型×品类×题号区间）`)
+    ElMessage.success(`任务已创建（总题集 ${task.question_ids.length} 题）。点击“众包采集”创建采集子项目`)
     wizard.value = false
     await load()
   } catch (e) {
@@ -655,7 +535,7 @@ onMounted(async () => {
   if (route.query.create) { router.replace({ query: { ...route.query, create: undefined } }); openWizard() }
   unsubBrand = onBrandChanged(() => load())
 })
-onBeforeUnmount(() => { stopPolling(); if (unsubBrand) unsubBrand() })
+onBeforeUnmount(() => { if (unsubBrand) unsubBrand() })
 </script>
 
 <style scoped>
@@ -707,28 +587,10 @@ onBeforeUnmount(() => { stopPolling(); if (unsubBrand) unsubBrand() })
 .result-cite-link { color: #409eff; font-size: 12px; word-break: break-all; text-decoration: none; }
 .result-cite-link:hover { text-decoration: underline; }
 .last-import-time { font-size: 11px; color: #a8abb2; margin-top: 2px; }
-.go-win-hint { font-size: 11px; color: #d97706; margin-top: 3px; line-height: 1.4; }
-.go-win-hint code { background: #fff3e0; padding: 0 4px; border-radius: 3px; font-size: 11px; color: #b45309; }
 
-/* Win 操作指引 alert：置顶 2 行可折叠 */
-.win-guide { margin-bottom: 16px; cursor: pointer; }
-.win-guide :deep(.el-alert__content) { width: 100%; }
-.wg-bar { display: flex; align-items: flex-start; gap: 8px; }
-.wg-ico { font-size: 18px; margin-top: 2px; flex-shrink: 0; }
-.wg-title { flex: 1; }
+
 /* 第一行：引导句 + 关键路径。加大字号、主色调，显眼 */
-.wg-lead { font-size: 15px; font-weight: 700; color: var(--el-color-primary); }
-.wg-path { display: block; font-size: 15px; font-weight: 600; color: var(--el-color-primary); line-height: 1.6; margin-top: 2px; }
-.wg-path code { background: rgba(64,158,255,.12); padding: 1px 6px; border-radius: 4px; font-size: 14px; color: var(--el-color-primary); }
-.wg-more { display: inline-block; margin-top: 6px; color: var(--el-color-primary); font-size: 13px; white-space: nowrap; opacity: .8; }
 /* 详情区：字号回到正常阅读尺寸，颜色偏深，便于细看 */
-.wg-detail { margin-top: 12px; cursor: default; border-top: 1px dashed var(--el-border-color); padding-top: 10px; }
-.wg-detail .wg-intro { font-size: 14px; color: #444; line-height: 1.7; margin-bottom: 8px; }
-.wg-detail .wg-sub { font-size: 14px; color: #333; margin: 12px 0 6px; }
-.wg-steps { margin: 6px 0 6px 22px; padding: 0; }
-.wg-steps li { margin: 9px 0; font-size: 14px; line-height: 1.7; color: #333; }
-.wg-note { color: #d97706; font-size: 13px; margin-left: 4px; }
-.wg-cmd { background: #f6f8fa; border: 1px solid #ebeef5; border-radius: 4px; padding: 7px 11px; margin: 5px 0; font-family: Consolas, "Courier New", monospace; font-size: 13px; color: #24292f; white-space: pre-wrap; word-break: break-all; }
 .import-logs-box { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ebeef5; }
 .import-logs-head { font-size: 13px; color: #555; font-weight: 600; margin-bottom: 8px; }
 .import-log-list { display: flex; flex-direction: column; gap: 6px; }

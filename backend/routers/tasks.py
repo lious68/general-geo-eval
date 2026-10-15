@@ -82,44 +82,10 @@ async def recalculate_all_tasks(user=Depends(require_admin)):
             "message": f"已重算 {recalc} 个任务的评分"}
 
 
-@router.post("/{task_id}/batches")
-async def create_batch(task_id: str, req: models.BatchCreate, user=Depends(require_admin)):
-    """建下载批次，返回 v2 配置 JSON（前端下载，本地 runner 消费）。"""
-    try:
-        config = await task_service.create_batch_config(
-            task_id, req.model_keys, req.per_model_question_ids, req.delay
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"success": True, "data": config,
-            "message": f"已生成批次配置（{len(req.model_keys)} 模型）"}
-
-
-@router.get("/{task_id}/batches/{batch_id}/config")
-async def get_batch_config(task_id: str, batch_id: str):
-    """取某批次已持久化的 v2 配置，供前端重新下载（重下/重跑）。"""
-    try:
-        config = await task_service.get_batch_config(task_id, batch_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    return {"success": True, "data": config}
-
-
-@router.post("/{task_id}/batches/{batch_id}/repush")
-async def repush_batch(task_id: str, batch_id: str, user=Depends(require_admin)):
-    """重新触发 webhook 推送（Win 离线/丢失时手动重推）。"""
-    try:
-        ok = await task_service.repush_batch(task_id, batch_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    return {"success": True, "data": {"pushed": ok},
-            "message": "已重推" if ok else "推送失败（Win 未达），批次保留可再重推"}
-
-
 @router.post("/{task_id}/batches/{batch_id}/import-results")
 async def import_batch_results(task_id: str, batch_id: str,
                                file: UploadFile = File(...), user=Depends(require_admin)):
-    """导入本地 runner 结果 JSON 到指定批次（pin batch_id），按 (task,model,question) 合并去重 + 重算。"""
+    """导入兼容格式 结果 JSON 到指定批次（pin batch_id），按 (task,model,question) 合并去重 + 重算。"""
     content = await file.read()
     try:
         data = json.loads(content)
@@ -153,7 +119,7 @@ async def get_batch_import_logs(task_id: str, batch_id: str):
 @router.post("/{task_id}/import-results")
 async def import_results(task_id: str, file: UploadFile = File(...),
                          user=Depends(require_admin)):
-    """导入本地 runner 结果 JSON，按 (task,model,question) 合并去重 + 重算。"""
+    """导入兼容格式 结果 JSON，按 (task,model,question) 合并去重 + 重算。"""
     content = await file.read()
     try:
         data = json.loads(content)

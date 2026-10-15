@@ -14,7 +14,7 @@ class EvaluationCreate(BaseModel):
     categories: Optional[List[str]] = None    # 按品类筛选
     temperature: float = 0.7
     delay: float = 1.0
-    mode: str = "api"  # "api" 或 "webchat"
+    mode: str = "api"  # 服务端仅 API；WebChat 由众包客户端采集
     enable_search: bool = False  # 是否启用联网搜索
 
 

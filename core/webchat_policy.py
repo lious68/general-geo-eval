@@ -6,7 +6,7 @@ UCloud GEO 评估框架 - WebChat 逐模型策略与封号信号检测
   2. 页面/错误文本的封号信号分类（throttle / login_expired）
   3. 退避参数
 
-这些配置同时被 server（eval_runner.py）与本地 runner（local_webchat_runner.py）使用，
+这些配置同时被 server（eval_runner.py）与本地 runner（已退役的本地执行器（历史说明））使用，
 是 core/scheduler.py 调度决策的唯一输入。
 """
 import re

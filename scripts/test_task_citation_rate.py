@@ -11,6 +11,7 @@ MetricsCalculator._has_effective_citation 恒 False → task citation_rate 恒 0
 本测：4 道有效题，2 条带有效引用（Q1 官方、Q2 第三方+提及）、2 条无效引用
 （Q3 非第三方域名、Q4 无引用）→ citation_rate 应 = 2/4 = 0.5，而非 0。
 """
+from batch_fixture import seed_batch
 import asyncio
 import os
 import sys
@@ -47,7 +48,7 @@ async def main():
     task = await task_service.create_task_with_questions("CiteRate", ["Q1", "Q2", "Q3", "Q4"])
     task_id = task["id"]
 
-    cfg = await task_service.create_batch_config(
+    cfg = await seed_batch(
         task_id, ["kimi"], {"kimi": ["Q1", "Q2", "Q3", "Q4"]}, delay=8
     )
 

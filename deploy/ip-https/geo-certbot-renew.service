@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew GEO IP TLS certificate and reload nginx
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/opt/geo-certbot/bin/certbot renew --quiet --no-random-sleep-on-renew

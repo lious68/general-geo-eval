@@ -1,4 +1,5 @@
 """task_service 自检：建任务 → 建批次 → 两次导入合并去重 → 矩阵 + 重算。"""
+from batch_fixture import seed_batch
 import asyncio
 import os
 import sys
@@ -40,7 +41,7 @@ async def main():
     task_id = task["id"]
 
     # 2. 建批次：deepseek 跑 Q1,Q2；kimi 跑 Q1,Q2,Q3
-    cfg = await task_service.create_batch_config(
+    cfg = await seed_batch(
         task_id, ["deepseek", "kimi"],
         {"deepseek": ["Q1", "Q2"], "kimi": ["Q1", "Q2", "Q3"]}, delay=8
     )

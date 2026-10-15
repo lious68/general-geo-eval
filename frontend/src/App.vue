@@ -27,13 +27,9 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
-        <el-menu-item index="/evaluation">
+        <el-menu-item index="/tasks">
           <el-icon><VideoPlay /></el-icon>
-          <span>执行评测</span>
-        </el-menu-item>
-        <el-menu-item index="/history">
-          <el-icon><Clock /></el-icon>
-          <span>历史评测情况</span>
+          <span>评测任务</span>
         </el-menu-item>
         <el-menu-item index="/citation-sources">
           <el-icon><Link /></el-icon>
@@ -104,7 +100,7 @@ import { useCurrentBrand } from './composables/useCurrentBrand'
 
 const route = useRoute()
 const router = useRouter()
-const currentRoute = computed(() => route.path)
+const currentRoute = computed(() => route.path.startsWith('/tasks') ? '/tasks' : route.path)
 const currentRole = ref(getRole())
 const currentUsername = ref(getUsername())
 const evalStore = useEvalProgressStore()

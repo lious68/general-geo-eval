@@ -1,3 +1,5 @@
+> **2026-10-03 更新：Windows 双机与服务端 WebChat 爬虫已退役。** 以下旧采集步骤仅为历史记录，不再执行；当前流程见 [众包运行说明](docs/CROWD_ONLY.md)。
+
 # 通用 GEO 评估系统
 
 > 类似 [geo.timus.cn](https://geo.timus.cn/) 的 GEO（Generative Engine Optimization）评分体系，评估**任意品牌**在五大 AI 模型中的品牌可见度。由 UCloud 专用版（ucloud-geo-eval）通用化演化而来：首页输入被测品牌/官网/行业，AI 按行业特性生成题集，评测指标对任意品牌生效。

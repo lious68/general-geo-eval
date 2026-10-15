@@ -47,7 +47,15 @@ def state(project: str, body: dict, user=Depends(admin)):
 
 @router.post('/admin/projects/{project}/delete')
 def delete_project(project: str, user=Depends(admin)):
-    return invoke(store().delete_project, project)
+    return invoke(store().delete_project, project, str(user.get('username') or user.get('id') or 'admin'))
+
+@router.post('/admin/projects/{project}/restore')
+def restore_project(project: str, user=Depends(admin)):
+    return invoke(store().restore_project, project, str(user.get('username') or user.get('id') or 'admin'))
+
+@router.get('/admin/projects/{project}/history')
+def project_history(project: str, user=Depends(admin)):
+    return store().project_history(project)
 
 @router.get('/admin/samples')
 def samples(user=Depends(admin)):
@@ -113,6 +121,7 @@ async def gateway(action: str, body: dict, request: Request):
         try:result['evaluation']=await crowd_evaluation.sync(s,rows[0]['project'])
         except Exception:result['sync_error']='验收已保存，评分同步失败，请在 GEO 同步评分'
         return result
+    if action == 'lifecycle':return invoke(s.update_lifecycle,body.get('states',[]))
     if action == 'workflow':return s.workflow_feed()
     if action == 'identities':return invoke(s.identities,body.get('users',[]))
     if action == 'link-task':return invoke(s.link_task,body.get('code',''),body.get('link',{}),body.get('expected_project'))

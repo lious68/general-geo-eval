@@ -1,6 +1,6 @@
 <template>
   <div class="history">
-    <h2 class="page-title"><el-icon><Clock /></el-icon> 历史评测情况</h2>
+    <h2 class="page-title"><el-icon><Clock /></el-icon> 旧版运行记录</h2>
 
     <el-card v-if="!runs.length && !loading" style="text-align:center;padding:40px">
       <el-empty description="暂无评测记录" :image-size="80">
@@ -66,18 +66,6 @@
         </el-table>
       </el-card>
 
-      <!-- 对比区 -->
-      <div class="compare-section" v-if="completedRuns.length >= 2" style="margin-top:20px">
-        <h3 class="section-title"><el-icon><TrendCharts /></el-icon> 评测趋势对比</h3>
-        <el-card>
-          <div ref="trendChartRef" style="height:300px"></div>
-        </el-card>
-        <div class="metric-trend-grid">
-          <el-card v-for="metric in metricTrendDefs" :key="metric.key">
-            <div :ref="el => { if (el) metricChartRefs[metric.key] = el }" style="height:280px"></div>
-          </el-card>
-        </div>
-      </div>
     </template>
   </div>
 </template>
@@ -171,12 +159,7 @@ async function loadRuns() {
 
     loading.value = false
 
-    // 渲染趋势图
-    await nextTick()
-    if (completedRuns.value.length >= 2) {
-      renderTrendChart()
-      renderMetricTrendCharts()
-    }
+
   } catch (e) {
     console.error('Load runs error:', e)
     loading.value = false

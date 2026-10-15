@@ -191,20 +191,20 @@ def test_publisher_gateway_review_permissions(store, monkeypatch):
 def test_delete_project_guards(store):
     p=project(store)
     store.link_code(p['id'])
-    assert store.delete_project(p['id']) == {'ok': True}
-    assert not store.projects()
+    assert store.delete_project(p['id']) == {'ok': True,'archived':True}
+    assert store.projects()[0]['archived']
     with store.connect() as c:
         assert c.execute('SELECT count(*) FROM link_codes').fetchone()[0] == 0
     p=project(store)
     store.claim('zhun:1',p['id'])
-    with pytest.raises(ValueError,match='领取'):
+    with pytest.raises(ValueError,match='租约'):
         store.delete_project(p['id'])
     p=project(store)
     with store.connect() as c:
         c.execute('INSERT INTO task_links VALUES(?,?)',(p['id'],'{}'))
     with pytest.raises(ValueError,match='准活'):
         store.delete_project(p['id'])
-    assert len(store.projects()) == 2
+    assert len(store.projects()) == 3
 
 
 def test_withdraw_releases_unfinished_preserves_samples(store):

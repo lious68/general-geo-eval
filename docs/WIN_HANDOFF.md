@@ -1,3 +1,5 @@
+> **2026-10-03 更新：Windows 双机与服务端 WebChat 爬虫已退役。** 以下旧采集步骤仅为历史记录，不再执行；当前流程见 [众包运行说明](CROWD_ONLY.md)。
+
 # Win 守护进程交接文档（2026-06-26）
 
 > 给 Win 主机上的 Claude Code 用：读这份 + 配套的 [部署 runbook](./DEPLOY_AGENT_RUNBOOK.md) 就能接上当前进度。

@@ -27,13 +27,8 @@ if ! command -v python3 &> /dev/null; then
     yum install -y python3 python3-pip 2>/dev/null || apt-get install -y python3 python3-pip 2>/dev/null
 fi
 pip3 install --upgrade pip -q
-pip3 install fastapi uvicorn aiosqlite python-dotenv openai snownlp pandas openpyxl numpy playwright -q
+pip3 install fastapi uvicorn aiosqlite python-dotenv openai snownlp pandas openpyxl numpy -q
 
-# 2b. 安装 Playwright Chromium（WebChat 评测模式需要）
-echo "🌐 安装 Playwright Chromium..."
-pip3 install playwright -q
-playwright install chromium 2>/dev/null || echo "⚠️  Playwright Chromium 安装失败，WebChat 模式不可用"
-playwright install-deps chromium 2>/dev/null || true
 
 # 3. 安装 Node.js 和构建前端
 echo "📦 构建前端..."

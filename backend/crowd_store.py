@@ -20,6 +20,9 @@ class CrowdStore:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as c:
             c.executescript('''
+            CREATE TABLE IF NOT EXISTS project_archive(project TEXT PRIMARY KEY, actor TEXT NOT NULL, created INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS project_audit(id TEXT PRIMARY KEY, project TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, created INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS task_lifecycle(project TEXT PRIMARY KEY, body TEXT NOT NULL, updated INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS withdrawals(project TEXT NOT NULL, worker TEXT NOT NULL, PRIMARY KEY(project,worker));
             CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, body TEXT NOT NULL, active INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS leases(id TEXT PRIMARY KEY, worker TEXT NOT NULL, project TEXT NOT NULL, expires INTEGER NOT NULL, released INTEGER NOT NULL DEFAULT 0);
@@ -109,23 +112,68 @@ class CrowdStore:
 
     def projects(self):
         with self.connect() as c:
-            return [dict(json.loads(r['body']), active=bool(r['active']), task_link=json.loads(r['link']) if r['link'] else None) for r in c.execute('SELECT p.*,l.body AS link FROM projects p LEFT JOIN task_links l ON l.project=p.id')]
+            result=[]
+            for r in c.execute('SELECT p.*,l.body AS link,a.created AS archived_at,t.body AS lifecycle,t.updated FROM projects p LEFT JOIN task_links l ON l.project=p.id LEFT JOIN project_archive a ON a.project=p.id LEFT JOIN task_lifecycle t ON t.project=p.id'):
+                result.append(dict(json.loads(r['body']),active=bool(r['active']),task_link=json.loads(r['link']) if r['link'] else None,
+                    archived=bool(r['archived_at']),archived_at=r['archived_at'],lifecycle=json.loads(r['lifecycle']) if r['lifecycle'] else None,lifecycle_updated=r['updated']))
+            return result
 
-    def delete_project(self, project):
+    def update_lifecycle(self, states):
+        if not isinstance(states,list):raise ValueError('状态列表无效')
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            if not c.execute('SELECT 1 FROM projects WHERE id=?', (project,)).fetchone():
-                raise ValueError('项目不存在')
-            if c.execute('SELECT 1 FROM task_links WHERE project=?', (project,)).fetchone():
-                raise ValueError('项目已关联准活任务，不能删除；可暂停分配')
-            if c.execute('SELECT 1 FROM assignments WHERE project=?', (project,)).fetchone():
-                raise ValueError('项目已有领取或采集记录，不能删除；可暂停分配')
-            c.execute('DELETE FROM link_codes WHERE project=?', (project,))
-            c.execute('DELETE FROM projects WHERE id=?', (project,))
-        return {'ok': True}
+            for state in states:
+                if not isinstance(state,dict) or state.get('status') not in ('open','hidden','awaiting_payment','cancelled','deleted','cancellation_requested','closed','completed'):raise ValueError('任务状态无效')
+                if type(state.get('can_archive')) is not bool:raise ValueError('回收状态无效')
+                row=c.execute('SELECT body FROM task_links WHERE project=?',(state.get('project'),)).fetchone()
+                if not row or json.loads(row[0])['task_id']!=state.get('task_id'):raise ValueError('任务关联不一致')
+                body={k:state.get(k) for k in ('task_id','status','can_archive','blockers','settled_samples')}
+                c.execute('INSERT INTO task_lifecycle VALUES(?,?,?) ON CONFLICT(project) DO UPDATE SET body=excluded.body,updated=excluded.updated',(state['project'],json.dumps(body,ensure_ascii=False),int(time.time())))
+                if state['status'] in ('cancelled','deleted','cancellation_requested'):
+                    c.execute('UPDATE projects SET active=0 WHERE id=?',(state['project'],))
+        return {'ok':True}
+
+    def delete_project(self, project, actor='admin'):
+        """Soft-delete only after delivery and settlement checks; retain lineage and scores."""
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM projects WHERE id=?',(project,)).fetchone():raise ValueError('项目不存在')
+            if c.execute('SELECT 1 FROM project_archive WHERE project=?',(project,)).fetchone():return {'ok':True,'archived':True}
+            linked=c.execute('SELECT 1 FROM task_links WHERE project=?',(project,)).fetchone()
+            if linked:
+                row=c.execute('SELECT * FROM task_lifecycle WHERE project=?',(project,)).fetchone()
+                if not row or int(time.time())-row['updated']>180:raise ValueError('准活状态未同步或已过期，请稍后刷新；历史关联将保留')
+                state=json.loads(row['body'])
+                if state['status'] not in ('cancelled','deleted'):raise ValueError('请先在准活取消任务并完成结算，再移入回收站')
+                if not state['can_archive']:raise ValueError('；'.join(state.get('blockers') or ['准活仍有未结事项']))
+                accepted={r[0] for r in c.execute("SELECT s.id FROM samples s JOIN assignments a ON a.id=s.assignment WHERE a.project=? AND s.status='accepted'",(project,))}
+                if not accepted.issubset(set(state.get('settled_samples') or [])):raise ValueError('已通过样本的付款记录尚未同步，请完成结算后刷新')
+            elif c.execute('SELECT 1 FROM leases WHERE project=? AND released=0 AND expires>?',(project,int(time.time()))).fetchone():
+                raise ValueError('还有有效采集租约，请先完成或释放')
+            if c.execute("SELECT 1 FROM samples s JOIN assignments a ON a.id=s.assignment WHERE a.project=? AND s.status IN ('pending','revision','late')",(project,)).fetchone():raise ValueError('还有待验收、待补充或迟交样本，请先处理')
+            c.execute('INSERT INTO project_archive VALUES(?,?,?)',(project,actor,int(time.time())))
+            c.execute('INSERT INTO project_audit VALUES(?,?,?,?,?)',(uuid.uuid4().hex,project,'archive',actor,int(time.time())))
+            c.execute('UPDATE projects SET active=0 WHERE id=?',(project,))
+            c.execute('UPDATE leases SET released=1 WHERE project=?',(project,))
+            c.execute('DELETE FROM link_codes WHERE project=?',(project,))
+        return {'ok':True,'archived':True}
+
+    def restore_project(self, project, actor='admin'):
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM project_archive WHERE project=?',(project,)).fetchone():raise ValueError('项目不在回收站')
+            c.execute('DELETE FROM project_archive WHERE project=?',(project,))
+            c.execute('UPDATE projects SET active=0 WHERE id=?',(project,))
+            c.execute('INSERT INTO project_audit VALUES(?,?,?,?,?)',(uuid.uuid4().hex,project,'restore',actor,int(time.time())))
+        return {'ok':True,'active':False}
+
+    def project_history(self, project):
+        with self.connect() as c:
+            return [dict(r) for r in c.execute('SELECT action,actor,created FROM project_audit WHERE project=? ORDER BY created DESC,rowid DESC',(project,))]
 
     def link_code(self, project):
         with self.connect() as c:
+            if c.execute('SELECT 1 FROM project_archive WHERE project=?',(project,)).fetchone():raise ValueError('请先恢复项目')
             if not c.execute('SELECT 1 FROM projects WHERE id=?',(project,)).fetchone():raise ValueError('项目不存在')
             if c.execute('SELECT 1 FROM task_links WHERE project=?',(project,)).fetchone():raise ValueError('项目已关联准活任务')
             code=secrets.token_urlsafe(24)
@@ -182,6 +230,11 @@ class CrowdStore:
 
     def active(self, project, active):
         with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if active:
+                if c.execute('SELECT 1 FROM project_archive WHERE project=?',(project,)).fetchone():raise ValueError('请先恢复项目')
+                state=c.execute('SELECT body FROM task_lifecycle WHERE project=?',(project,)).fetchone()
+                if state and json.loads(state[0])['status'] in ('cancelled','deleted','cancellation_requested'):raise ValueError('准活任务已取消或回收，不能恢复分配')
             if c.execute('UPDATE projects SET active=? WHERE id=?', (int(active), project)).rowcount != 1:
                 raise ValueError('项目不存在')
 
@@ -278,6 +331,7 @@ class CrowdStore:
                     return {'id':old['id'],'status':old['status'],'digest':digest}
                 if old['status'] != 'revision':
                     raise ValueError('该题已提交；原始样本不可覆盖')
+            if c.execute('SELECT 1 FROM project_archive WHERE project=?',(a['project'],)).fetchone():raise ValueError('项目已移入回收站，不能提交新成果')
             p = json.loads(c.execute('SELECT body FROM projects WHERE id=?', (a['project'],)).fetchone()[0])
             if body.get('prompt') != p['questions'][a['question']] or body.get('platform') != p['platform']:
                 raise ValueError('问题或平台与分配不符')

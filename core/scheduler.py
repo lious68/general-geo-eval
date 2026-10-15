@@ -11,7 +11,7 @@ UCloud GEO 评估框架 - 三级任务调度引擎（任务 → 模型 → 问�
         LoginExpiredError → 该模型剩余单元 skipped（需人工重登）。
   - 单题多次重试：瞬态错误指数退避 + 抖动，超 max_attempts 落 failed。
 
-server（eval_runner.py）与 local（local_webchat_runner.py）共用本引擎，
+server（eval_runner.py）与 local（已退役的本地执行器（历史说明））共用本引擎，
 各自注入 client_factory（webchat 浏览器 / API 客户端）与 on_unit_done 回调。
 
 客户端协议（client_factory 返回的对象需满足）：

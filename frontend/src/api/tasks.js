@@ -20,13 +20,6 @@ export function deleteTask(taskId) {
   return apiFetch(`/tasks/${taskId}`, { method: 'DELETE' })
 }
 
-export function createBatch(taskId, { model_keys, per_model_question_ids, delay }) {
-  return apiFetch(`/tasks/${taskId}/batches`, {
-    method: 'POST',
-    body: JSON.stringify({ model_keys, per_model_question_ids, delay }),
-  })
-}
-
 export function importResults(taskId, file) {
   const formData = new FormData()
   formData.append('file', file)
@@ -41,10 +34,6 @@ export function importBatchResults(taskId, batchId, file) {
 
 export function getBatchResults(taskId, batchId) {
   return apiFetch(`/tasks/${taskId}/batches/${batchId}/results`)
-}
-
-export function repushBatch(taskId, batchId) {
-  return apiFetch(`/tasks/${taskId}/batches/${batchId}/repush`, { method: 'POST' })
 }
 
 export function getBatchImportLogs(taskId, batchId) {

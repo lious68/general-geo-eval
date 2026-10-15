@@ -1,3 +1,5 @@
+> **2026-10-03 更新：Windows 双机与服务端 WebChat 爬虫已退役。** 以下旧采集步骤仅为历史记录，不再执行；当前流程见 [众包运行说明](CROWD_ONLY.md)。
+
 # Agent 一键双机部署 Runbook
 
 > **这份文档写给 agent 自己看。** agent 读完本文档 + `WIN_HANDOFF.md` + 开发机 memory

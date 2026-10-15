@@ -2,8 +2,7 @@
 
 职责：
   - 建任务（固定总题集）
-  - 建下载批次（生成 v2 配置 JSON）
-  - 导入本地 runner 结果（按 (task_id,model,question) 去重覆盖 + 重算评分）
+  - 导入兼容格式 结果（按 (task_id,model,question) 去重覆盖 + 重算评分）
   - 构建任务详情（覆盖率矩阵 + 批次列表）
 """
 import os
@@ -13,7 +12,6 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-import httpx
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
@@ -23,40 +21,6 @@ from analyzer import AnalysisResult, CitationInfo
 from brand_profile import default_brand_profile
 
 logger = logging.getLogger(__name__)
-
-
-async def _push_webhook(task_id: str, batch_id: str, run_id: str) -> bool:
-    """建批次后 fire-and-forget 推送 webhook 到 Win 守护进程。失败不改状态（留 config_downloaded）。"""
-    win_url = os.environ.get("WEBHOOK_WIN_URL", "")
-    secret = os.environ.get("WEBHOOK_SECRET", "")
-    if not win_url or not secret:
-        logger.warning("WEBHOOK_WIN_URL/WEBHOOK_SECRET 未配置，跳过推送")
-        return False
-    payload = {
-        "task_id": task_id,
-        "batch_id": batch_id,
-        "config_url": f"/api/tasks/{task_id}/batches/{batch_id}/config",
-    }
-    try:
-        async with httpx.AsyncClient() as c:
-            r = await c.post(f"{win_url}/webhook/batch",
-                             json=payload,
-                             headers={"X-Webhook-Secret": secret},
-                             timeout=5)
-            r.raise_for_status()
-        await db.set_batch_status(run_id, "pushed")
-        return True
-    except Exception as e:
-        logger.warning(f"webhook 推送失败 (batch={batch_id}): {e}；批次留 config_downloaded，可重推")
-        return False
-
-
-async def repush_batch(task_id: str, batch_id: str) -> bool:
-    """手动重推：按 batch_id 找 run_id 再推一次。"""
-    run = await db.get_run_by_batch_id(batch_id)
-    if not run:
-        raise ValueError("批次不存在")
-    return await _push_webhook(task_id, batch_id, run["id"])
 
 
 def _new_id(prefix: str) -> str:
@@ -100,113 +64,10 @@ async def resolve_question_ids(question_ids: Optional[List[str]],
     return [q["id"] for q in questions]
 
 
-async def create_batch_config(task_id: str, model_keys: List[str],
-                              per_model_question_ids: Dict[str, List[str]],
-                              delay: float = 8.0) -> Dict:
-    """在 task 下建下载批次，返回 v2 配置 JSON（供前端下载、本地 runner 消费）。
-
-    per_model_question_ids: {model_key: [question_id, ...]}，每模型独立题区间（总题集子集）。
-    """
-    task = await db.get_task(task_id)
-    if not task:
-        raise ValueError("任务不存在")
-    total_qids = set(task["question_ids"])
-
-    # 校验 model_keys 中每个模型都有对应的题区间配置
-    for mk in model_keys:
-        if mk not in per_model_question_ids:
-            raise ValueError(f"模型 {mk} 缺少题区间配置")
-
-    # 校验每模型题区间都是总题集子集
-    for mk, qids in per_model_question_ids.items():
-        if mk not in model_keys:
-            raise ValueError(f"模型 {mk} 未在 model_keys 中")
-        bad = [q for q in qids if q not in total_qids]
-        if bad:
-            raise ValueError(f"模型 {mk} 的题区间含任务总题集外的题: {bad[:3]}")
-
-    # 取完整题对象（units 并集）— 按 task.brand_id 取，防跨品牌时 current 不同导致题集缺失
-    union_qids = sorted({q for qids in per_model_question_ids.values() for q in qids})
-    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
-    q_map = {q["id"]: q for q in all_questions}
-    questions = [q_map[qid] for qid in union_qids if qid in q_map]
-
-    batch_id = _new_id("batch")
-    run_id = _new_id("run")
-    # 品牌档案随配置透传给本地 runner，按 task 所属品牌取（多品牌不串口径）
-    brand_profile = db.get_brand_profile_by_id(task.get("brand_id") or "ucloud")
-    config = {
-        "version": 2,
-        "task_id": task_id,
-        "task_name": task["name"],
-        "brand_id": task.get("brand_id") or "ucloud",
-        "batch_id": batch_id,
-        "run_id": run_id,
-        "generated_at": datetime.utcnow().isoformat(),
-        "total_question_ids": task["question_ids"],
-        "units": [{"model_key": mk, "question_ids": per_model_question_ids[mk]} for mk in model_keys],
-        "questions": questions,
-        "delay": delay,
-        "brand_profile": brand_profile.to_dict(),
-    }
-    # 持久化完整 v2 配置，便于以后重下/重跑
-    await db.add_task_batch(
-        run_id=run_id, task_id=task_id, batch_id=batch_id,
-        name=task["name"], model_keys=model_keys,
-        question_ids=union_qids,
-        per_model=per_model_question_ids,
-        config=config,
-    )
-    # 建批次成功后主动推送 webhook（失败不阻塞，留 config_downloaded 可重推）
-    try:
-        await _push_webhook(task_id, batch_id, run_id)
-    except Exception as e:
-        logger.warning(f"create_batch_config 推送异常: {e}")
-    return config
-
-
-async def get_batch_config(task_id: str, batch_id: str) -> Dict:
-    """取某批次的 v2 配置（优先返回已持久化的完整配置；旧批次只有片段则就地重建）。"""
-    task = await db.get_task(task_id)
-    if not task:
-        raise ValueError("任务不存在")
-    batches = await db.list_task_batches(task_id)
-    b = next((x for x in batches if x.get("batch_id") == batch_id), None)
-    if not b:
-        raise ValueError("批次不存在")
-
-    cfg = b.get("config") or {}
-    if cfg.get("version") == 2 and cfg.get("units"):
-        return cfg
-
-    # 兼容旧批次：仅存了片段 {delay, per_model_question_ids}，就地重建完整 v2 配置
-    per_model = cfg.get("per_model_question_ids") or {}
-    model_keys = b.get("model_keys") or list(per_model.keys())
-    union_qids = sorted({q for qs in per_model.values() for q in qs}) or (b.get("question_ids") or [])
-    all_questions = await db.get_questions(active_only=True, brand_id=task.get("brand_id") or "ucloud")
-    q_map = {q["id"]: q for q in all_questions}
-    questions = [q_map[qid] for qid in union_qids if qid in q_map]
-    # 兼容旧批次重建
-    return {
-        "version": 2,
-        "task_id": task_id,
-        "task_name": task["name"],
-        "brand_id": task.get("brand_id") or "ucloud",
-        "batch_id": batch_id,
-        "run_id": b.get("id"),
-        "generated_at": b.get("started_at") or datetime.utcnow().isoformat(),
-        "total_question_ids": task["question_ids"],
-        "units": [{"model_key": mk, "question_ids": per_model.get(mk, [])} for mk in model_keys],
-        "questions": questions,
-        "delay": cfg.get("delay", 8.0),
-        "brand_profile": db.get_brand_profile_by_id(task.get("brand_id") or "ucloud").to_dict(),
-    }
-
-
 async def import_batch_results(task_id: str, data: Dict, batch_id: Optional[str] = None,
                                file_name: Optional[str] = None,
                                file_size: Optional[int] = None) -> Dict:
-    """导入本地 runner 结果 JSON，按 (task_id,model,question) 去重覆盖，重算 task 评分。
+    """导入兼容格式 结果 JSON，按 (task_id,model,question) 去重覆盖，重算 task 评分。
 
     data 形如 {"meta": {"task_id","batch_id","run_id",...},
               "questions": [...], "analysis_results": {mk: [result,...]}}
@@ -449,6 +310,17 @@ async def build_task_detail(task_id: str) -> Optional[Dict]:
     }
 
 
+def task_composite_score(scores: List[Dict]) -> Optional[float]:
+    """Match Dashboard's equal-platform average of its four weighted metrics."""
+    if not scores:
+        return None
+    weights = {"coverage_rate": .45, "citation_rate": .25,
+               "recommendation_rate": .20, "sentiment_score": .10}
+    return round(sum(sum(float(row.get(key) or 0) * weight
+                         for key, weight in weights.items())
+                     for row in scores) / len(scores) * 100, 1)
+
+
 async def build_task_list_summary() -> List[Dict]:
     tasks = await db.list_tasks()
     out = []
@@ -464,8 +336,12 @@ async def build_task_list_summary() -> List[Dict]:
         total_cells = len(all_qids) * len(models)
         done_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "done")
         missing_cells = sum(1 for mk in coverage for s in coverage[mk].values() if s == "missing")
+        scores = await db.get_task_scores(t["id"])
         out.append({
             **t,
+            "geo_score": task_composite_score(scores),
+            "scored_models": len(scores),
+            "metric_averages": {key: sum(float(s.get(key) or 0) for s in scores) / len(scores) for key in ("coverage_rate", "citation_rate", "recommendation_rate", "sentiment_score")} if scores else None,
             "models": models,
             "total_cells": total_cells,
             "done_cells": done_cells,

@@ -1,5 +1,6 @@
 """一键验证：把 output/run_20260630_175142_b5d763.json (40题×5模型) 导入主库为一个任务，
 供「行动计划」页验证用。可重复运行（按 task_id 覆盖）。"""
+from batch_fixture import seed_batch
 import asyncio, os, sys, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
@@ -28,7 +29,7 @@ async def main():
         print(f"新建任务: {task_id}")
 
     # 建批次配置 + 导入
-    cfg = await task_service.create_batch_config(
+    cfg = await seed_batch(
         task_id, list(d["analysis_results"].keys()),
         {mk: qids for mk in d["analysis_results"]}, 0)
     print(f"批次: {cfg['batch_id']}")

@@ -25,7 +25,7 @@ MODELS_CONFIG = {
 # ModelVerse 中转平台配置
 MODELVERSE_CONFIG = {
     "base_url": "https://api.modelverse.cn/v1",
-    "api_key": os.getenv("MODELVERSE_API_KEY", "jzSvXwLaaE9g03Pc0fC043Fe-0Fb7-4665-bC2A-10EdA49d"),
+    "api_key": os.getenv("MODELVERSE_API_KEY", ""),
     "models": {
         "deepseek": "deepseek-chat",
         "ernie": "ernie-4.0-8k",

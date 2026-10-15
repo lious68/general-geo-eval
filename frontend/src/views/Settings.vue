@@ -106,7 +106,7 @@
           <el-input v-model="newUser.username" placeholder="请输入用户名" />
         </el-form-item>
         <el-form-item label="密码">
-          <el-input v-model="newUser.password" type="password" placeholder="请输入密码" show-password />
+          <el-input v-model="newUser.password" type="password" placeholder="至少12位密码" show-password />
         </el-form-item>
         <el-form-item label="角色">
           <el-select v-model="newUser.role" style="width:100%">

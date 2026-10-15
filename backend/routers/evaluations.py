@@ -126,7 +126,7 @@ async def evaluation_ws(ws: WebSocket, run_id: str, token: str = None):
 
 
 @router.post("/{run_id}/recalculate-scores")
-async def recalculate_scores(run_id: str):
+async def recalculate_scores(run_id: str, user=Depends(require_admin)):
     """从 analysis_results 重新计算 geo_scores
 
     用于本地导入后 geo_scores 缺失的情况。

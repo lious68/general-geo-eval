@@ -13,8 +13,21 @@ PROTECTED_PREFIXES = ["/api/settings", "/api/evaluations", "/api/questions", "/a
 
 
 def hash_password(password: str) -> str:
-    """SHA256 密码哈希"""
-    return hashlib.sha256(password.encode()).hexdigest()
+    salt = secrets.token_hex(16)
+    digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
+    return f"scrypt${salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        if stored.startswith("scrypt$"):
+            _, salt, expected = stored.split("$")
+            actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
+        else:
+            actual, expected = hashlib.sha256(password.encode()).hexdigest(), stored
+        return secrets.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -52,28 +65,23 @@ async def login(body: dict):
         if username == "admin":
             stored_hash = await db.get_admin_password_hash()
             if not stored_hash:
-                # 首次使用：创建管理员账号
-                if len(password) < 6:
-                    raise HTTPException(400, "密码至少6位")
-                pw_hash = hash_password(password)
-                await db.create_user("admin", pw_hash, "admin")
-                token = secrets.token_hex(32)
-                await db.create_session(token, "admin", "admin")
-                return {"success": True, "data": {"token": token, "role": "admin", "username": "admin", "is_first_login": True}}
+                raise HTTPException(403, "管理员尚未初始化，请联系服务器管理员")
             # 验证旧密码
-            if hash_password(password) != stored_hash:
+            if not verify_password(password, stored_hash):
                 raise HTTPException(401, "用户名或密码错误")
             # 迁移旧密码到 users 表
-            await db.create_user("admin", stored_hash, "admin")
+            await db.create_user("admin", hash_password(password), "admin")
             token = secrets.token_hex(32)
             await db.create_session(token, "admin", "admin")
             return {"success": True, "data": {"token": token, "role": "admin", "username": "admin", "is_first_login": False}}
         raise HTTPException(401, "用户名或密码错误")
 
     # 正常验证
-    if hash_password(password) != user["password_hash"]:
+    if not verify_password(password, user["password_hash"]):
         raise HTTPException(401, "用户名或密码错误")
 
+    if not user["password_hash"].startswith("scrypt$"):
+        await db.update_user_password(user["username"], hash_password(password))
     token = secrets.token_hex(32)
     await db.create_session(token, user["username"], user["role"])
     return {"success": True, "data": {"token": token, "role": user["role"], "username": user["username"], "is_first_login": False}}
@@ -106,10 +114,10 @@ async def change_password(body: dict, user_info: dict = Depends(get_current_user
     new_password = body.get("new_password", "")
 
     user = await db.get_user_by_username(user_info["username"])
-    if not user or hash_password(old_password) != user["password_hash"]:
+    if not user or not verify_password(old_password, user["password_hash"]):
         raise HTTPException(401, "原密码错误")
-    if len(new_password) < 6:
-        raise HTTPException(400, "新密码至少6位")
+    if len(new_password) < 12:
+        raise HTTPException(400, "新密码至少12位")
 
     await db.update_user_password(user_info["username"], hash_password(new_password))
     # 清除该用户所有旧会话
@@ -146,8 +154,8 @@ async def create_user_endpoint(body: dict, user_info: dict = Depends(get_current
     role = body.get("role", "viewer")
     if not username:
         raise HTTPException(400, "用户名不能为空")
-    if len(password) < 6:
-        raise HTTPException(400, "密码至少6位")
+    if len(password) < 12:
+        raise HTTPException(400, "密码至少12位")
     if role not in ("admin", "viewer"):
         raise HTTPException(400, "角色必须是 admin 或 viewer")
     try:

@@ -259,8 +259,10 @@ class CrowdStore:
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
             if c.execute('SELECT 1 FROM withdrawals WHERE project=? AND worker=?',(project,worker)).fetchone():raise ValueError('已退出该采集项目')
-            old = c.execute('SELECT * FROM leases WHERE worker=? AND released=0 AND expires>?', (worker, now)).fetchone()
-            if old and old['project']!=project:raise ValueError('请先完成或释放另一个项目的题目')
+            old = c.execute(
+                'SELECT * FROM leases WHERE worker=? AND project=? AND released=0 AND expires>?',
+                (worker, project, now),
+            ).fetchone()
             row = c.execute('SELECT body FROM projects WHERE id=? AND active=1', (project,)).fetchone()
             if not row:
                 raise ValueError('项目不存在或已暂停')

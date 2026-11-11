@@ -27,6 +27,18 @@ def test_concurrent_allocation_and_resume(store):
     lease=next(x for x in leases if x)
     assert store.claim(lease['worker'],p['id'])['id']==lease['id']
 
+def test_worker_can_claim_two_projects_and_resume_each(store):
+    worker = 'zhun:1'
+    first, second = project(store), project(store)
+    first_lease = store.claim(worker, first['id'])
+    second_lease = store.claim(worker, second['id'])
+    assert first_lease['id'] != second_lease['id']
+    assert store.claim(worker, first['id'])['id'] == first_lease['id']
+    assert store.claim(worker, second['id'])['id'] == second_lease['id']
+    store.heartbeat(worker, first_lease['id'], release=True)
+    assert store.claim(worker, second['id'])['id'] == second_lease['id']
+
+
 def test_idempotency_and_identity(store):
     p=project(store);lease=store.claim('zhun:1',p['id']);store.start('zhun:1',lease['assignments'][0]['id']);body=sample(lease)
     with pytest.raises(ValueError):store.submit('zhun:2',body)

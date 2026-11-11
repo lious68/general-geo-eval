@@ -46,7 +46,7 @@ import {ref,computed,onMounted} from 'vue'
 import {ElMessageBox,ElMessage} from 'element-plus'
 import {useRoute} from 'vue-router'
 import {getToken} from '../composables/useWebSocket'
-const platformOptions=[{name:'ds',url:'https://chat.deepseek.com/'},{name:'豆包',url:'https://www.doubao.com/chat/'},{name:'kimi',url:'https://www.kimi.com/zh'},{name:'qwen',url:'https://chat.qwen.ai/'},{name:'文心',url:'https://wenxin.baidu.com/?enter_type=yiyan_site'}]
+const platformOptions=[{name:'ds',url:'https://chat.deepseek.com/'},{name:'豆包',url:'https://www.doubao.com/chat/'},{name:'kimi',url:'https://www.kimi.com/zh'},{name:'qwen',url:'https://www.qianwen.com/'},{name:'文心',url:'https://wenxin.baidu.com/?enter_type=yiyan_site'}]
 const selectedPlatforms=ref(['豆包']),newConversation=ref(true)
 const form=ref({title:'',replicas:1,batch_size:5}),error=ref(''),busy=ref(false),projects=ref([]),samples=ref([]),selected=ref(null),reason=ref('')
 const projectPage=ref(1)

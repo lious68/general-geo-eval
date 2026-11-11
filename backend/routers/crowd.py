@@ -71,6 +71,57 @@ def sample_detail(sample_id: str,user=Depends(admin)):
 def link_code(project: str,user=Depends(admin)):
     return invoke(store().link_code,project)
 
+@router.post('/admin/samples/batch-review')
+async def batch_review(body: dict, user=Depends(admin)):
+    ids = body.get('sample_ids')
+    decision = body.get('decision')
+    reason = body.get('reason', '')
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(
+        not isinstance(sample, str) or not 1 <= len(sample) <= 128 for sample in ids
+    ):
+        raise HTTPException(400, '请选择 1–100 条样本')
+    if decision not in ('accepted', 'force_accepted'):
+        raise HTTPException(400, '请选择通过或强制通过')
+    if decision == 'force_accepted' and (
+        body.get('confirmed') is not True or not isinstance(reason, str) or not reason.strip()
+    ):
+        raise HTTPException(400, '请填写原因并确认强制通过')
+    if not isinstance(reason, str) or len(reason) > 1000:
+        raise HTTPException(400, '验收原因最多 1000 字')
+    s = store()
+    ids = list(dict.fromkeys(ids))
+    placeholders = ','.join('?' for _ in ids)
+    with s.connect() as c:
+        projects = dict(c.execute(
+            'SELECT s.id,a.project FROM samples s JOIN assignments a ON a.id=s.assignment '
+            f'WHERE s.id IN ({placeholders})', ids,
+        ).fetchall())
+    allowed = {p['id'] for p in s.projects()}
+    results, changed = [], set()
+    reviewer = str(user.get('username') or user.get('id') or 'admin')
+    for sample in ids:
+        project = projects.get(sample)
+        if project not in allowed:
+            results.append({'id': sample, 'error': '样本不存在或无权访问'})
+            continue
+        try:
+            result = s.review(sample, decision, reason.strip() or '批量验收通过',
+                              reviewer, body.get('confirmed', False))
+        except (ValueError, TypeError, KeyError) as exc:
+            results.append({'id': sample, 'error': str(exc)})
+        else:
+            changed.add(project)
+            results.append({'id': sample, **result})
+    from services import crowd_evaluation
+    sync_errors = []
+    for project in sorted(changed):
+        try:
+            await crowd_evaluation.sync(s, project)
+        except Exception:
+            sync_errors.append(project)
+    return {'results': results, 'sync_errors': sync_errors}
+
+
 @router.post('/admin/samples/{sample}/review')
 async def review(sample: str, body: dict, user=Depends(admin)):
     result=invoke(store().review,sample,body.get('decision'),body.get('reason',''),user.get('username','admin'),body.get('confirmed',False))

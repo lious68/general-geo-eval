@@ -65,7 +65,7 @@ async def sync(store,project_id):
         link=p['evaluation'];task=await db.get_task(link['task_id'])
         if not task or not await db.get_run_by_batch_id(link['batch_id']):raise ValueError('所属任务或众包批次已删除，请核对后重新关联')
         existing={r['question_id']:r for r in await db.get_task_results(link['task_id'],link['model_key'])}
-        accepted=sorted((s for s in store.samples() if s['project']==project_id and s['status']=='accepted'),key=lambda s:(s['created'],s['id']))
+        accepted=sorted(store.samples(project_id=project_id, status='accepted'),key=lambda s:(s['created'],s['id']))
         chosen={}
         for s in accepted:chosen.setdefault(link['question_ids'][s['question']],s)
         analyzer=ResponseAnalyzer(brand_profile=db.get_brand_profile_by_id(link['brand_id']))

@@ -37,7 +37,7 @@
       <div class="project-pages"><span class="help">共 {{ groupedProjects.length }} 个大任务 · 每页最多 6 个</span><el-button v-if="projectPage>1" size="small" @click="projectPage--">上一页</el-button><span>{{ projectPage }} / {{ Math.max(1,Math.ceil(groupedProjects.length/6)) }}</span><el-button v-if="projectPage*6<groupedProjects.length" size="small" @click="projectPage++">更多</el-button></div>
       <el-dialog v-model="historyOpen" title="子项目操作记录" width="min(560px,92vw)"><p v-for="(item,i) in historyRows" :key="i">{{ item.action==='archive'?'移入回收站':'恢复记录' }} · {{ item.actor }} · {{ new Date(item.created*1000).toLocaleString() }}</p><p v-if="!historyRows.length">暂无回收或恢复记录</p></el-dialog>
     </section><section v-show="activeTab==='review'" class="work-panel"><div class="panel-heading"><div><h2>原始样本与验收</h2><p>验收通过仅计入有效样本，不自动付款。迟交样本保留，可核对证据后填写理由并强制通过；通过后计入配额，已被重新占用的名额不能重复计入。</p></div></div><div v-if="focusedProject||focusedWorker" class="scope-banner"><div><strong>当前只显示准活跳转的范围：</strong>{{ focusDescription }}<span class="scope-count">（{{ reviewScope.length }} 条样本，其中待验收 {{ reviewScope.filter(s=>s.status==='pending').length }}）</span><p v-if="hiddenPending" class="scope-warn">另有 {{ hiddenPending }} 条待验收样本不在此范围内，列表中看不到。</p></div><div class="scope-actions"><el-button v-if="hiddenPending" type="warning" @click="showAllPending">查看全部 {{ samples.filter(s=>s.status==='pending').length }} 条待验收</el-button><el-button @click="focusedProject='';focusedWorker=''">查看全部样本</el-button></div></div><div class="review-filters"><el-input v-model="sampleSearch" clearable placeholder="搜索题目、项目或参与者"/><el-select v-model="sampleState"><el-option label="全部状态" value=""/><el-option label="待验收" value="pending"/><el-option label="已通过" value="accepted"/><el-option label="迟交待核对" value="late"/><el-option label="待补充" value="revision"/><el-option label="已驳回" value="rejected"/></el-select><el-button @click="load">刷新结果</el-button></div>
-    <el-button type="primary" :disabled="busy||!reviewSelection.length" @click="batchAccept">批量通过（{{ reviewSelection.length }}）</el-button><el-table :data="filteredSamples" @selection-change="rows=>reviewSelection=rows" stripe empty-text="暂无符合条件的样本"><el-table-column type="selection" width="45" :selectable="row=>row.status==='pending'&&!row.review_blockers.length"/><el-table-column label="来源编号" min-width="190"><template #default="{row}"><span v-if="row.source_label" class="source-id">{{ row.source_label }}</span><template v-else>{{ row.project_title }} · 第{{ row.question_no }}题<small class="source-id">未编号</small></template></template></el-table-column><el-table-column prop="prompt" label="题目" min-width="210"/><el-table-column prop="platform" label="WebChat 渠道" width="120"/><el-table-column label="准活参与者" min-width="130"><template #default="{row}">{{ row.worker_name || '姓名同步中' }}<small style="display:block">{{ row.worker }}</small></template></el-table-column><el-table-column label="验收状态" min-width="200"><template #default="{row}"><el-tag :type="row.status==='accepted'?'success':row.status==='pending'?'warning':'info'">{{ row.forced_acceptance ? "已通过（人工强制）" : statusLabel(row.status) }}</el-tag><p v-for="b in row.review_blockers" :key="b" style="color:#a55b12"><el-button v-if="b.startsWith('引用采集不完整')" link type="warning" @click="citationDetail=row.citation_diagnostics">{{ row.citation_diagnostics?.summary || b }} · 查看原因</el-button><template v-else>{{ b }}</template></p><small v-if="row.review">{{ row.review.reason }}</small></template></el-table-column><el-table-column label="查看" width="110"><template #default="{row}"><el-button  :disabled="busy" @click="openEvidence(row)">打开证据</el-button></template></el-table-column></el-table>
+    <el-button type="primary" :disabled="busy||!reviewSelection.some(eligibleForApproval)" @click="batchAccept(false)">批量通过（{{ reviewSelection.filter(eligibleForApproval).length }}）</el-button><el-button type="warning" :disabled="busy||!reviewSelection.length" @click="batchAccept(true)">批量强制通过（{{ reviewSelection.length }}）</el-button><el-table :data="filteredSamples" @selection-change="rows=>reviewSelection=rows" stripe empty-text="暂无符合条件的样本"><el-table-column type="selection" width="45" :selectable="row=>['pending','late'].includes(row.status)"/><el-table-column label="来源编号" min-width="190"><template #default="{row}"><span v-if="row.source_label" class="source-id">{{ row.source_label }}</span><template v-else>{{ row.project_title }} · 第{{ row.question_no }}题<small class="source-id">未编号</small></template></template></el-table-column><el-table-column prop="prompt" label="题目" min-width="210"/><el-table-column prop="platform" label="WebChat 渠道" width="120"/><el-table-column label="准活参与者" min-width="130"><template #default="{row}">{{ row.worker_name || '姓名同步中' }}<small style="display:block">{{ row.worker }}</small></template></el-table-column><el-table-column label="验收状态" min-width="200"><template #default="{row}"><el-tag :type="row.status==='accepted'?'success':row.status==='pending'?'warning':'info'">{{ row.forced_acceptance ? "已通过（人工强制）" : statusLabel(row.status) }}</el-tag><p v-for="b in row.review_blockers" :key="b" style="color:#a55b12"><el-button v-if="b.startsWith('引用采集不完整')" link type="warning" @click="citationDetail=row.citation_diagnostics">{{ row.citation_diagnostics?.summary || b }} · 查看原因</el-button><template v-else>{{ b }}</template></p><small v-if="row.review">{{ row.review.reason }}</small></template></el-table-column><el-table-column label="查看" width="110"><template #default="{row}"><el-button  :disabled="busy" @click="openEvidence(row)">打开证据</el-button></template></el-table-column></el-table>
     </section><el-dialog :model-value="!!citationDetail" @close="citationDetail=null" title="引用采集缺项与原因" width="min(720px, 92vw)"><template v-if="citationDetail"><el-alert :title="citationDetail.summary" type="warning" :closable="false"/><p>已采集 {{ citationDetail.collected_entries }} 条引用记录，包含 {{ citationDetail.unique_links }} 个不同链接。</p><p class="help">以下为采集客户端记录；引用位置、来源条目和不同文章的数量可能不同，不能直接相减推算缺失文章数。</p><ul><li v-for="(note,i) in citationDetail.notes" :key="i" style="white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0">{{ note }}</li></ul><p v-if="!citationDetail.notes.length">未提供具体原因，请核对原始证据或退回补充说明。</p></template></el-dialog><el-dialog v-model="showSample" title="原始采集证据" width="80%"><template v-if="selected"><el-alert v-if="error" :title="error" type="error" :closable="false"/><el-alert v-for="b in selected.review_blockers" :key="b" :title="b" type="warning" :closable="false"/><p>{{ selected.project_title }} · 第 {{ selected.question_no }} 题 · {{ selected.platform }} · {{ selected.worker_name || selected.worker }} · {{ statusLabel(selected.status) }} · 补充版本 {{ selected.version }}</p><el-alert v-if="selected.forced_acceptance" :title="'人工强制通过 · 操作人：'+selected.review.reviewer+' · 原因：'+selected.review.reason" type="warning" :closable="false"/><h3>{{ selected.body.prompt }}</h3><pre>{{ selected.body.answer }}</pre><h4>采集条件</h4><pre>{{ selected.body.conditions }}</pre><h4>引用</h4><p>{{ selected.body.citations_state }}</p><p v-for="(c,i) in selected.body.citations" :key="i">{{ c.kind }} · {{ c.title }} · {{ c.url }}</p><h4>采集完整性说明</h4><ul><li v-for="(note,i) in selected.body.evidence.completeness_notes || []" :key="i">{{ note }}</li></ul><h4>页面原文</h4><pre>{{ selected.body.evidence.page_text }}</pre><img v-for="(s,i) in selected.body.evidence.screenshots || []" :key="i" :src="'data:'+s.mime+';base64,'+s.base64" alt="采集截图" style="max-width:100%"/><p>内容摘要：{{ selected.digest }}</p><el-input v-model="reason" placeholder="通过无需填写；退回、驳回或强制通过请填写原因"/><el-button :disabled="busy || selected.status!=='pending' || selected.review_blockers.length>0" @click="review('accepted')">通过</el-button><el-button type="warning" :disabled="busy || !['pending','late'].includes(selected.status)" @click="review('force_accepted')">强制通过</el-button><el-button :disabled="busy || selected.status!=='pending'" @click="review('revision')">退回补充</el-button><el-button :disabled="busy || selected.status!=='pending'" @click="review('rejected')">最终驳回</el-button></template></el-dialog>
   </div>
 </template>
@@ -154,7 +154,54 @@ async function deleteProject(row){
 async function toggle(row){await safe(async()=>{await api('projects/'+row.id+'/state',{active:!row.active});projects.value=await api('projects')})}
 async function openEvidence(row){await safe(async()=>{selected.value=await api('samples/'+row.id);reason.value=''})}
 const reviewSelection=ref([]),citationDetail=ref(null)
-async function batchAccept(){await safe(async()=>{const rows=[...reviewSelection.value],failures=[];let done=0;for(const row of rows){try{const r=await api('samples/'+row.id+'/review',{decision:'accepted',reason:'批量验收通过'});done++;if(r.sync_error)failures.push(r.sync_error)}catch(e){failures.push(row.question_no+'题：'+e.message)}}samples.value=await api('samples');reviewSelection.value=[];ElMessage.success('已通过 '+done+' 条');if(failures.length)error.value=failures.join('；')})}
+function eligibleForApproval(row) {
+  return row.status === 'pending' && !row.review_blockers.length
+}
+
+async function batchAccept(force) {
+  const rows = force ? [...reviewSelection.value] : reviewSelection.value.filter(eligibleForApproval)
+  if (!rows.length) return
+  let reason = ''
+  if (force) {
+    try {
+      const result = await ElMessageBox.prompt(
+        '将强制通过所选 ' + rows.length + ' 条样本，保留缺项记录并计入评分。请填写人工核对原因。',
+        '确认批量强制通过',
+        { type: 'warning', confirmButtonText: '确认强制通过', cancelButtonText: '取消',
+          inputValidator: value => (value?.trim() && value.length <= 1000) || '请输入 1–1000 字的验收原因' }
+      )
+      reason = result.value.trim()
+    } catch { return }
+  }
+  await safe(async () => {
+    const failures = [], unsynced = new Set()
+    let done = 0
+    for (let offset = 0; offset < rows.length; offset += 100) {
+      const group = rows.slice(offset, offset + 100)
+      try {
+        const response = await api('samples/batch-review', {
+          sample_ids: group.map(row => row.id), decision: force ? 'force_accepted' : 'accepted',
+          reason, confirmed: force
+        })
+        for (const result of response.results) {
+          if (result.error) {
+            const row = group.find(item => item.id === result.id)
+            failures.push((row?.source_label || result.id) + '：' + result.error)
+          } else done++
+        }
+        response.sync_errors.forEach(project => unsynced.add(project))
+      } catch (error) {
+        failures.push('第 ' + (offset + 1) + '–' + (offset + group.length) + ' 条请求失败：' + error.message)
+        break
+      }
+    }
+    samples.value = await api('samples')
+    reviewSelection.value = []
+    if (done) ElMessage.success('已通过 ' + done + ' 条')
+    if (unsynced.size) failures.push(unsynced.size + ' 个项目评分同步失败，可在项目管理重试')
+    if (failures.length) error.value = failures.join('；')
+  })
+}
 async function review(decision){await safe(async()=>{if(decision==='accepted'&&!reason.value.trim())reason.value='验收通过';if(!reason.value.trim())throw Error('请填写验收理由，再提交处理结果');if(decision==='force_accepted'){try{await ElMessageBox.confirm('强制通过会保留缺项和条件不符记录，并计入通过配额；正式任务按约定单价进入待人工结算，不会自动付款。原因：'+reason.value,'确认强制通过',{type:'warning',confirmButtonText:'确认强制通过',cancelButtonText:'取消'})}catch{return}}const reviewed=await api('samples/'+selected.value.id+'/review',{decision,reason:reason.value,confirmed:decision==='force_accepted'});selected.value=null;samples.value=await api('samples');if(reviewed.sync_error)error.value=reviewed.sync_error})}
 function statusLabel(s){return {pending:'待验收',accepted:'已通过',revision:'待补充',rejected:'已驳回',late:'迟交待核对'}[s]||s}
 

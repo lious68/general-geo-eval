@@ -141,6 +141,32 @@ def test_api_auth(tmp_path,monkeypatch):
         assert c.get('/api/crowd/admin/projects').status_code==200
 
 
+def test_batch_force_review_requires_confirmation_and_reports_each_sample(store, monkeypatch):
+    monkeypatch.setattr(crowd, 'store', lambda: store)
+    p = project(store)
+    lease = store.claim('zhun:1', p['id'])
+    store.start('zhun:1', lease['assignments'][0]['id'])
+    submission = sample(lease)
+    submission['citations_state'] = 'incomplete'
+    sample_id = store.submit('zhun:1', submission)['id']
+    app = FastAPI()
+    app.include_router(crowd.router)
+    app.dependency_overrides[crowd.get_current_user] = lambda: {'role': 'admin', 'username': 'auditor'}
+    client = TestClient(app)
+    url = '/api/crowd/admin/samples/batch-review'
+    body = {'sample_ids': [sample_id, 'missing', sample_id], 'reason': '证据已核对'}
+    assert client.post(url, json=dict(body, decision='force_accepted')).status_code == 400
+    ordinary = client.post(url, json=dict(body, decision='accepted')).json()
+    assert all('error' in row for row in ordinary['results'])
+    result = client.post(url, json=dict(body, decision='force_accepted', confirmed=True))
+    assert result.status_code == 200
+    rows = result.json()['results']
+    assert len(rows) == 2 and rows[0]['forced_acceptance'] and 'error' in rows[1]
+    saved = store.samples(sample_id=sample_id)[0]
+    assert saved['review']['reviewer'] == 'auditor'
+    assert saved['body']['citations_state'] == 'incomplete'
+
+
 def test_lease_lasts_a_day_without_heartbeat(store, monkeypatch):
     now=1800000000
     monkeypatch.setattr('crowd_store.time.time',lambda:now)

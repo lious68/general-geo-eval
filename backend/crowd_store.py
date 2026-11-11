@@ -407,12 +407,18 @@ class CrowdStore:
             for r in rows:self._stamp(c,r['id'],project,r['question'])
             return len(rows)
 
-    def samples(self, worker=None, sample_id=None):
+    def samples(self, worker=None, sample_id=None, *, project_id=None, status=None):
         with self.connect() as c:
             sql = 'SELECT s.*,a.worker,a.project,a.question,p.body AS project_body,i.name AS worker_name,sl.body AS lineage_body FROM samples s JOIN assignments a ON a.id=s.assignment JOIN projects p ON p.id=a.project LEFT JOIN identities i ON i.worker=a.worker LEFT JOIN sample_lineage sl ON sl.sample=s.id'
             filters=[];params=[]
             if worker:filters.append('a.worker=?');params.append(worker)
             if sample_id:filters.append('s.id=?');params.append(sample_id)
+            if project_id is not None:
+                filters.append('a.project=?')
+                params.append(project_id)
+            if status is not None:
+                filters.append('s.status=?')
+                params.append(status)
             rows = c.execute(sql + (' WHERE '+' AND '.join(filters) if filters else '') + ' ORDER BY s.created DESC',params)
             result=[]
             for row in rows:
